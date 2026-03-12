@@ -27,22 +27,23 @@
 | # | Bảng | Module | Mô tả | Phase |
 |---|------|--------|--------|:-----:|
 | 1 | Users | Auth & Profile | Người dùng | 1 |
-| 2 | RefreshTokens | Auth | Token làm mới | 1 |
-| 3 | Follows | Profile | Quan hệ theo dõi | 2 |
-| 4 | Tournaments | Tournament | Giải đấu | 1 |
-| 5 | Participants | Tournament | Người tham gia giải | 1 |
-| 6 | Teams | Tournament (Doubles) | Đội (đấu đôi) | 1 |
-| 7 | Groups | Tournament | Bảng đấu | 1 |
-| 8 | GroupMembers | Tournament | Thành viên bảng | 1 |
-| 9 | Matches | Match & Scoring | Trận đấu | 1 |
-| 10 | MatchScoreHistories | Match & Scoring | Lịch sử sửa điểm | 1 |
-| 11 | CommunityGames | Community | Game cộng đồng | 2 |
-| 12 | GameParticipants | Community | Người tham gia game | 2 |
-| 13 | ChatRooms | Chat | Phòng chat | 2 |
-| 14 | ChatMembers | Chat | Thành viên phòng chat | 2 |
-| 15 | Messages | Chat | Tin nhắn | 2 |
-| 16 | Notifications | Notification | Thông báo | 1 |
-| 17 | DeviceTokens | Notification | FCM tokens | 1 |
+| 2 | UserAuthProviders | Auth | OAuth providers (Google, Facebook, Apple) | 1 |
+| 3 | RefreshTokens | Auth | Token làm mới | 1 |
+| 4 | Follows | Profile | Quan hệ theo dõi | 2 |
+| 5 | Tournaments | Tournament | Giải đấu | 1 |
+| 6 | Participants | Tournament | Người tham gia giải | 1 |
+| 7 | Teams | Tournament (Doubles) | Đội (đấu đôi) | 1 |
+| 8 | Groups | Tournament | Bảng đấu | 1 |
+| 9 | GroupMembers | Tournament | Thành viên bảng | 1 |
+| 10 | Matches | Match & Scoring | Trận đấu | 1 |
+| 11 | MatchScoreHistories | Match & Scoring | Lịch sử sửa điểm | 1 |
+| 12 | CommunityGames | Community | Game cộng đồng | 2 |
+| 13 | GameParticipants | Community | Người tham gia game | 2 |
+| 14 | ChatRooms | Chat | Phòng chat | 2 |
+| 15 | ChatMembers | Chat | Thành viên phòng chat | 2 |
+| 16 | Messages | Chat | Tin nhắn | 2 |
+| 17 | Notifications | Notification | Thông báo | 1 |
+| 18 | DeviceTokens | Notification | FCM tokens | 1 |
 
 ---
 
@@ -183,21 +184,22 @@
 
 ### 3.1. Users
 
-Bảng người dùng chính, lưu thông tin tài khoản và hồ sơ.
+Bảng người dùng chính, lưu thông tin tài khoản và hồ sơ. OAuth providers được tách ra bảng `UserAuthProviders`.
 
 | Cột | Kiểu dữ liệu | Null | Default | Mô tả |
 |-----|--------------|------|---------|--------|
 | **Id** | INTEGER | ❌ | Auto-increment | Khóa chính |
 | Email | VARCHAR(255) | ❌ | | Email đăng nhập, unique |
-| PasswordHash | VARCHAR(255) | ❌ | | bcrypt hash |
+| PasswordHash | VARCHAR(255) | ✅ | NULL | bcrypt hash (NULL nếu social-only) |
 | Name | VARCHAR(100) | ❌ | | Tên hiển thị |
 | AvatarUrl | VARCHAR(500) | ✅ | NULL | Link ảnh đại diện Cloudinary |
 | Bio | TEXT | ✅ | NULL | Tiểu sử ngắn |
 | SkillLevel | DECIMAL(2,1) | ❌ | 3.0 | Trình độ 1.0-5.0 |
 | DominantHand | VARCHAR(10) | ✅ | NULL | `'left'` / `'right'` |
 | PaddleType | VARCHAR(100) | ✅ | NULL | Loại vợt |
-| Provider | VARCHAR(20) | ✅ | NULL | `'local'` / `'google'` / `'apple'` |
-| ProviderId | VARCHAR(255) | ✅ | NULL | ID từ OAuth provider |
+| EmailVerified | BOOLEAN | ❌ | FALSE | Đã xác thực email chưa |
+| EmailVerifiedAt | TIMESTAMPTZ | ✅ | NULL | Thời điểm xác thực |
+| EmailVerificationToken | VARCHAR(500) | ✅ | NULL | OTP hoặc token xác thực |
 | CreatedAt | TIMESTAMPTZ | ❌ | `NOW()` | Ngày tạo |
 | UpdatedAt | TIMESTAMPTZ | ❌ | `NOW()` | Ngày cập nhật |
 
@@ -207,21 +209,24 @@ Bảng người dùng chính, lưu thông tin tài khoản và hồ sơ.
 - `CK_Users_SkillLevel` CHECK (SkillLevel >= 1.0 AND SkillLevel <= 5.0)
 - `CK_Users_DominantHand` CHECK (DominantHand IN ('left', 'right') OR DominantHand IS NULL)
 
+**Lưu ý:** `PasswordHash` là NULLABLE vì user đăng ký qua social (Google/Facebook/Apple) không có mật khẩu.
+
 ```sql
 CREATE TABLE "Users" (
-    "Id"            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    "Email"         VARCHAR(255) NOT NULL,
-    "PasswordHash"  VARCHAR(255) NOT NULL,
-    "Name"          VARCHAR(100) NOT NULL,
-    "AvatarUrl"     VARCHAR(500),
-    "Bio"           TEXT,
-    "SkillLevel"    DECIMAL(2,1) NOT NULL DEFAULT 3.0,
-    "DominantHand"  VARCHAR(10),
-    "PaddleType"    VARCHAR(100),
-    "Provider"      VARCHAR(20),
-    "ProviderId"    VARCHAR(255),
-    "CreatedAt"     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    "UpdatedAt"     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "Id"                       INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    "Email"                    VARCHAR(255) NOT NULL,
+    "PasswordHash"             VARCHAR(255),
+    "Name"                     VARCHAR(100) NOT NULL,
+    "AvatarUrl"                VARCHAR(500),
+    "Bio"                      TEXT,
+    "SkillLevel"               DECIMAL(2,1) NOT NULL DEFAULT 3.0,
+    "DominantHand"             VARCHAR(10),
+    "PaddleType"               VARCHAR(100),
+    "EmailVerified"            BOOLEAN NOT NULL DEFAULT FALSE,
+    "EmailVerifiedAt"          TIMESTAMPTZ,
+    "EmailVerificationToken"   VARCHAR(500),
+    "CreatedAt"                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "UpdatedAt"                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     CONSTRAINT "UQ_Users_Email" UNIQUE ("Email"),
     CONSTRAINT "CK_Users_SkillLevel" CHECK ("SkillLevel" >= 1.0 AND "SkillLevel" <= 5.0),
@@ -231,7 +236,47 @@ CREATE TABLE "Users" (
 
 ---
 
-### 3.2. RefreshTokens
+### 3.2. UserAuthProviders
+
+Lưu thông tin OAuth providers đã liên kết với user. Mỗi user có thể link nhiều providers (Google + Facebook + Apple).
+
+| Cột | Kiểu dữ liệu | Null | Default | Mô tả |
+|-----|--------------|------|---------|--------|
+| **Id** | INTEGER | ❌ | Auto-increment | Khóa chính |
+| UserId | INTEGER | ❌ | | FK → Users |
+| Provider | VARCHAR(20) | ❌ | | `'google'` / `'facebook'` / `'apple'` |
+| ProviderUserId | VARCHAR(255) | ❌ | | ID từ OAuth provider |
+| Email | VARCHAR(255) | ✅ | NULL | Email từ provider |
+| Name | VARCHAR(100) | ✅ | NULL | Tên từ provider |
+| AvatarUrl | VARCHAR(500) | ✅ | NULL | Avatar từ provider |
+| CreatedAt | TIMESTAMPTZ | ❌ | `NOW()` | |
+
+**Constraints:**
+- `UQ_UserAuthProviders_Provider_UserId` UNIQUE (Provider, ProviderUserId) — 1 tài khoản social chỉ link 1 user
+- `UQ_UserAuthProviders_User_Provider` UNIQUE (UserId, Provider) — 1 user chỉ link 1 account/provider
+
+```sql
+CREATE TABLE "UserAuthProviders" (
+    "Id"              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    "UserId"          INTEGER NOT NULL REFERENCES "Users"("Id") ON DELETE CASCADE,
+    "Provider"        VARCHAR(20) NOT NULL,
+    "ProviderUserId"  VARCHAR(255) NOT NULL,
+    "Email"           VARCHAR(255),
+    "Name"            VARCHAR(100),
+    "AvatarUrl"       VARCHAR(500),
+    "CreatedAt"       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT "CK_UserAuthProviders_Provider" CHECK ("Provider" IN ('google', 'facebook', 'apple')),
+    CONSTRAINT "UQ_UserAuthProviders_Provider_UserId" UNIQUE ("Provider", "ProviderUserId"),
+    CONSTRAINT "UQ_UserAuthProviders_User_Provider" UNIQUE ("UserId", "Provider")
+);
+
+CREATE INDEX "IX_UserAuthProviders_UserId" ON "UserAuthProviders"("UserId");
+```
+
+---
+
+### 3.3. RefreshTokens
 
 Lưu refresh token để cấp lại access token. Mỗi user có thể có nhiều refresh token (multi-device).
 
@@ -1133,3 +1178,47 @@ ORDER BY rank;
 - Tất cả TIMESTAMP trong DB lưu dạng **TIMESTAMPTZ** (UTC)
 - Frontend convert sang local timezone khi hiển thị
 - API nhận/trả thời gian dạng ISO 8601 với timezone: `2026-03-12T15:00:00+07:00`
+
+---
+
+## 8. Future Enhancements (Phase 3+)
+
+Các bảng có thể bổ sung khi scale ứng dụng:
+
+### 8.1. Multi-format Tournaments (Phase 3)
+
+Hiện tại chỉ hỗ trợ **Round Robin**. Để mở rộng sang Elimination, Pool Play, Swiss:
+
+| Bảng | Mô tả |
+|------|--------|
+| `TournamentFormats` | Định nghĩa các format: Round Robin, Single Elimination, Double Elimination, Pool Play |
+| `Brackets` | Nhánh đấu loại trực tiếp (Elimination). Mỗi giải có 1 bracket |
+| `BracketMatches` | Trận đấu trong bracket, có position (round, slot) để render bracket UI |
+| `TournamentRules` | JSONB lưu quy tắc riêng mỗi format (số bảng, số người qua vòng bảng...) |
+
+```
+# Pool Play = Round Robin bảng + Elimination vòng knock-out
+Tournament (format: pool_play)
+  └── Phase 1: Groups + Matches (Round Robin — giống hiện tại)
+  └── Phase 2: Brackets + BracketMatches (Elimination — bảng mới)
+```
+
+**Thiết kế hiện tại không bị ảnh hưởng** — chỉ cần thêm bảng mới, không xóa/sửa bảng cũ.
+
+### 8.2. Seasons & Rankings (Phase 4)
+
+| Bảng | Mô tả |
+|------|--------|
+| `Seasons` | Mùa giải (id, name, startDate, endDate, status) |
+| `SeasonTournaments` | Liên kết giải đấu với mùa (seasonId, tournamentId, pointsMultiplier) |
+| `PlayerRankings` | BXH theo mùa (userId, seasonId, points, wins, losses, rank) |
+| `PlayerStatistics` | Thống kê tổng hợp (totalMatches, winRate, avgScore, bestRank) |
+
+### 8.3. Các bảng khác có thể cần
+
+| Bảng | Mô tả |
+|------|--------|
+| `Venues` | Quản lý sân chơi (tên, địa chỉ, rating, ảnh) |
+| `Reports` | Báo cáo vi phạm |
+| `TournamentInviteCodes` | Mã mời tham gia giải (QR code / shared link) |
+| `UserBadges` | Huy hiệu thành tích |

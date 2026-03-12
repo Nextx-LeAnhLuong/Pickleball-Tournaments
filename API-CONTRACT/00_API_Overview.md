@@ -16,7 +16,7 @@
 
 | # | Module | File | Endpoints | Phase | Mô tả |
 |---|--------|------|:---------:|:-----:|-------|
-| 01 | [Authentication](./01_Authentication_API_Contracts.md) | `01_Authentication_API_Contracts.md` | 5 | 1 | Đăng ký, đăng nhập, OAuth2, refresh token, đổi mật khẩu |
+| 01 | [Authentication](./01_Authentication_API_Contracts.md) | `01_Authentication_API_Contracts.md` | 7 | 1 | Đăng ký, đăng nhập, OAuth2 (Google/Apple/Facebook), refresh token, đổi mật khẩu, xác thực email |
 | 02 | [User & Profile](./02_User_Profile_API_Contracts.md) | `02_User_Profile_API_Contracts.md` | 10 | 1 | Profile cá nhân, upload avatar, follow system, xem profile người khác |
 | 03 | [Tournament Management](./03_Tournament_Management_API_Contracts.md) | `03_Tournament_Management_API_Contracts.md` | 7 | 1 | Tạo/sửa/hủy giải, chuyển trạng thái, quản lý đội & bảng đấu |
 | 04 | [Participant Management](./04_Participant_Management_API_Contracts.md) | `04_Participant_Management_API_Contracts.md` | 7 | 1 | Mời, xin tham gia, duyệt, danh sách, rời/xóa, ghép đội, xếp bảng |
@@ -24,7 +24,7 @@
 | 06 | [Community Game](./06_Community_Game_API_Contracts.md) | `06_Community_Game_API_Contracts.md` | 8 | 2 | Tạo/sửa/xóa game giao hữu, lobby, tham gia, mời |
 | 07 | [Chat & Notification](./07_Chat_Notification_API_Contracts.md) | `07_Chat_Notification_API_Contracts.md` | 7 | 1-2 | Chat 1-1, group chat, thông báo in-app, push |
 
-**Tổng cộng: 50 endpoints**
+**Tổng cộng: 52 endpoints**
 
 ---
 
@@ -124,15 +124,17 @@
 
 ## Tổng Hợp Endpoints
 
-### Module 01: Authentication (5 endpoints)
+### Module 01: Authentication (7 endpoints)
 
 | # | Method | Endpoint | Auth | Mô tả |
 |---|--------|----------|:----:|-------|
 | 1.1 | POST | `/auth/register` | ❌ | Đăng ký tài khoản |
 | 1.2 | POST | `/auth/login` | ❌ | Đăng nhập |
-| 1.3 | POST | `/auth/social` | ❌ | Đăng nhập qua Google/Apple |
+| 1.3 | POST | `/auth/social` | ❌ | Đăng nhập qua Google/Apple/Facebook |
 | 1.4 | POST | `/auth/refresh` | ❌ | Làm mới access token |
 | 1.5 | PUT | `/auth/password` | ✅ | Đổi mật khẩu |
+| 1.6 | POST | `/auth/send-verification` | ✅ | Gửi OTP xác thực email |
+| 1.7 | POST | `/auth/verify-email` | ✅ | Xác thực email bằng OTP |
 
 ### Module 02: User & Profile (10 endpoints)
 

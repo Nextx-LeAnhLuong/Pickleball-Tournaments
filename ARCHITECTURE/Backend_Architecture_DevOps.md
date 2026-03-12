@@ -1,164 +1,346 @@
-# PICKLEBALL APP — BACKEND ARCHITECTURE & DEVOPS
-## Tài Liệu Kiến Trúc Backend & Hạ Tầng Triển Khai
+# PICKLEBALL APP � BACKEND ARCHITECTURE & DEVOPS
+## T�i Li?u Ki?n Tr�c Backend & H? T?ng Tri?n Khai
 
-**Phiên bản:** 1.0
-**Ngày:** Tháng 3, 2026
-**Công nghệ chính:** .NET 8 | PostgreSQL | Redis | SignalR | Docker
+**Phi�n b?n:** 1.0
+**Ng�y:** Th�ng 3, 2026
+**C�ng ngh? ch�nh:** .NET 8 | PostgreSQL | Redis | SignalR | Docker
 
 ---
 
-## MỤC LỤC
+## M?C L?C
 
-1. [Kiến trúc Backend](#1-kiến-trúc-backend)
-2. [Chi tiết từng tầng (Layer)](#2-chi-tiết-từng-tầng)
+1. [Ki?n tr�c Backend](#1-ki?n-tr�c-backend)
+2. [Chi ti?t t?ng t?ng (Layer)](#2-chi-ti?t-t?ng-t?ng)
 3. [Cross-Cutting Concerns](#3-cross-cutting-concerns)
-4. [Realtime — SignalR](#4-realtime--signalr)
+4. [Realtime � SignalR](#4-realtime--signalr)
 5. [Background Jobs & Queue](#5-background-jobs--queue)
 6. [Caching Strategy](#6-caching-strategy)
 7. [File Storage](#7-file-storage)
 8. [DevOps & CI/CD](#8-devops--cicd)
-9. [Hạ tầng triển khai (Infrastructure)](#9-hạ-tầng-triển-khai)
+9. [H? t?ng tri?n khai (Infrastructure)](#9-h?-t?ng-tri?n-khai)
 10. [Monitoring & Observability](#10-monitoring--observability)
-11. [Bảo mật (Security)](#11-bảo-mật)
-12. [Quy ước lập trình (Coding Conventions)](#12-quy-ước-lập-trình)
+11. [B?o m?t (Security)](#11-b?o-m?t)
+12. [Quy u?c l?p tr�nh (Coding Conventions)](#12-quy-u?c-l?p-tr�nh)
 
 ---
 
-## 1. Kiến Trúc Backend
+## 1. Ki?n Tr�c Backend
 
-### 1.1. Tổng quan — Clean Architecture
+### 1.1. T?ng quan � Clean Architecture
 
+``
++---------------------------------------------------------+
+�                    CLIENTS                               �
+�   React Web App  |  React Native App  |  Admin Panel     �
++---------------------------------------------------------+
+                         � HTTPS (REST + SignalR WebSocket)
++------------------------?--------------------------------+
+�              PickleballApp.API                            �
+�   +--------------+ +----------+ +--------------------+  �
+�   � Controllers   � � Hubs     � � Middleware          �  �
+�   � (REST API)    � �(SignalR) � � Auth | Error | Log  �  �
+�   +--------------+ +----------+ +--------------------+  �
++----------+--------------+-------------------------------+
+           �              �
++----------?--------------?-------------------------------+
+�              PickleballApp.Application                    �
+�   +--------------+ +----------+ +--------------------+  �
+�   � Services      � � DTOs     � � Validators          �  �
+�   � (Use Cases)   � �          � � (FluentValidation)  �  �
+�   +--------------+ +----------+ +--------------------+  �
+�          �                                               �
+�   +------?-------+                                       �
+�   � Interfaces    �  ? Dependency Inversion              �
+�   +--------------+                                       �
++----------+----------------------------------------------+
+           �
++----------?----------------------------------------------+
+�              PickleballApp.Domain                         �
+�   +--------------+ +----------+ +--------------------+  �
+�   � Entities      � � Enums    � � Value Objects       �  �
+�   � (POCO)        � �          � � Score, Rating...    �  �
+�   +--------------+ +----------+ +--------------------+  �
+�   +--------------+ +----------------------------------+  �
+�   � Domain Events � � Domain Exceptions                �  �
+�   +--------------+ +----------------------------------+  �
++---------------------------------------------------------+
+           ?
++----------+----------------------------------------------+
+�              PickleballApp.Infrastructure                 �
+�   +--------------+ +----------+ +--------------------+  �
+�   � EF Core       � � Redis    � � Cloudinary          �  �
+�   � DbContext     � � Cache    � � File Storage        �  �
+�   � Repositories  � � Service  � � Service (Mi?n ph�)  �  �
+�   +--------------+ +----------+ +--------------------+  �
+�   +--------------+ +----------+ +--------------------+  �
+�   � FCM Push      � � Email    � � Background Jobs     �  �
+�   � Notification  � � Service  � � (Hosted Services)   �  �
+�   +--------------+ +----------+ +--------------------+  �
++---------------------------------------------------------+
+``
+
+### 1.2. Nguyên tắc SOLID & Kiến trúc
+
+Toàn bộ backend tuân thủ nghiêm ngặt nguyên tắc **SOLID**:
+
+#### S — Single Responsibility Principle (SRP)
+
+> **Mỗi class chỉ có MỘT lý do để thay đổi.**
+
+| Class | Trách nhiệm duy nhất |
+|-------|----------------------|
+| `TournamentService` | CRUD giải đấu, chuyển trạng thái |
+| `ParticipantService` | Quản lý đăng ký, duyệt, mời |
+| `MatchService` | Nhập/sửa điểm, kết quả |
+| `StandingsService` | Tính BXH, xếp hạng |
+| `AuthService` | Đăng ký, đăng nhập, JWT |
+| `SocialAuthService` | Xử lý OAuth (Google, Facebook, Apple) |
+| `EmailVerificationService` | Gửi OTP, xác thực email |
+| `CreateTournamentValidator` | Validate input tạo giải |
+
+``csharp
+// ❌ SAI — vi phạm SRP: Service làm quá nhiều việc
+public class TournamentService
+{
+    public Task CreateAsync(...) { }
+    public Task InvitePlayerAsync(...) { }    // → Tách sang ParticipantService
+    public Task SubmitScoreAsync(...) { }     // → Tách sang MatchService
+    public Task CalculateStandingsAsync(...) { } // → Tách sang StandingsService
+}
+
+// ✅ ĐÚNG — Mỗi service 1 trách nhiệm
+public class TournamentService : ITournamentService { /* Chỉ CRUD giải */ }
+public class ParticipantService : IParticipantService { /* Chỉ quản lý participants */ }
+public class MatchService : IMatchService { /* Chỉ quản lý trận đấu + điểm */ }
+``
+
+#### O — Open/Closed Principle (OCP)
+
+> **Mở để mở rộng, đóng để sửa đổi.** Thêm tính năng mới KHÔNG cần sửa code cũ.
+
+**Ví dụ thực tế:** Thêm Facebook login không sửa code Google/Apple:
+
+```csharp
+// Application/Common/Interfaces/ISocialAuthProvider.cs
+public interface ISocialAuthProvider
+{
+    string ProviderName { get; }  // "google", "facebook", "apple"
+    Task<SocialUserInfo> ValidateTokenAsync(string token);
+}
+
+// Infrastructure/Auth/GoogleAuthProvider.cs
+public class GoogleAuthProvider : ISocialAuthProvider
+{
+    public string ProviderName => "google";
+    public async Task<SocialUserInfo> ValidateTokenAsync(string token)
+    {
+        var payload = await GoogleJsonWebSignature.ValidateAsync(token);
+        return new SocialUserInfo(payload.Subject, payload.Email, payload.Name, payload.Picture);
+    }
+}
+
+// Infrastructure/Auth/FacebookAuthProvider.cs — THÊM MỚI, không sửa code cũ ✅
+public class FacebookAuthProvider : ISocialAuthProvider
+{
+    public string ProviderName => "facebook";
+    public async Task<SocialUserInfo> ValidateTokenAsync(string token)
+    {
+        var response = await _httpClient.GetAsync(
+            `$"https://graph.facebook.com/me?fields=id,name,email,picture&access_token={token}"`);
+        var data = await response.Content.ReadFromJsonAsync<FacebookUserResponse>();
+        return new SocialUserInfo(data.Id, data.Email, data.Name, data.Picture.Data.Url);
+    }
+}
+
+// Application/Auth/Services/SocialAuthService.cs — Không cần sửa khi thêm provider mới
+public class SocialAuthService
+{
+    private readonly IEnumerable<ISocialAuthProvider> _providers;
+    
+    public async Task<AuthResponse> AuthenticateAsync(string providerName, string token)
+    {
+        var provider = _providers.FirstOrDefault(p => p.ProviderName == providerName)
+            ?? throw new DomainException(`$"Provider '{providerName}' không được hỗ trợ"`);
+        
+        var userInfo = await provider.ValidateTokenAsync(token);
+        // Tìm hoặc tạo user, liên kết provider vào UserAuthProviders...
+    }
+}
+``
+
+**DI Registration:**
+``csharp
+// Program.cs — Chỉ cần thêm 1 dòng để mở rộng
+services.AddScoped<ISocialAuthProvider, GoogleAuthProvider>();
+services.AddScoped<ISocialAuthProvider, AppleAuthProvider>();
+services.AddScoped<ISocialAuthProvider, FacebookAuthProvider>(); // ← Thêm provider mới
+``
+
+#### L — Liskov Substitution Principle (LSP)
+
+> **Subtype phải thay thế được cho base type mà không gây lỗi.**
+
+``csharp
+// Tất cả ISocialAuthProvider implementations có thể thay thế cho nhau
+ISocialAuthProvider provider = new GoogleAuthProvider();   // OK ✅
+ISocialAuthProvider provider = new FacebookAuthProvider(); // OK ✅
+ISocialAuthProvider provider = new AppleAuthProvider();    // OK ✅
+
+// SocialAuthService không cần biết đang dùng provider nào
+var userInfo = await provider.ValidateTokenAsync(token); // Hoạt động giống nhau
+``
+
+#### I — Interface Segregation Principle (ISP)
+
+> **Interface nhỏ, chuyên biệt.** Client không bị buộc depend vào method không dùng.
+
+``csharp
+// ❌ SAI — Interface quá lớn
+public interface IStorageService
+{
+    Task<string> UploadAsync(Stream file, string path);
+    Task DeleteAsync(string path);
+    Task<Stream> DownloadAsync(string path);
+    Task<string> GetSignedUrlAsync(string path);
+}
+
+// ✅ ĐÚNG — Tách nhỏ theo nhu cầu
+public interface IFileUploader
+{
+    Task<string> UploadAsync(Stream file, string path);
+}
+
+public interface IFileDeleter
+{
+    Task DeleteAsync(string path);
+}
+
+// Chỉ inject interface cần dùng
+public class TournamentService(IFileUploader uploader) { } // Chỉ cần upload
+public class CleanupJob(IFileDeleter deleter) { }          // Chỉ cần delete
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    CLIENTS                               │
-│   React Web App  |  React Native App  |  Admin Panel     │
-└────────────────────────┬────────────────────────────────┘
-                         │ HTTPS (REST + SignalR WebSocket)
-┌────────────────────────▼────────────────────────────────┐
-│              PickleballApp.API                            │
-│   ┌──────────────┐ ┌──────────┐ ┌────────────────────┐  │
-│   │ Controllers   │ │ Hubs     │ │ Middleware          │  │
-│   │ (REST API)    │ │(SignalR) │ │ Auth | Error | Log  │  │
-│   └──────┬───────┘ └────┬─────┘ └────────────────────┘  │
-└──────────┼──────────────┼───────────────────────────────┘
-           │              │
-┌──────────▼──────────────▼───────────────────────────────┐
-│              PickleballApp.Application                    │
-│   ┌──────────────┐ ┌──────────┐ ┌────────────────────┐  │
-│   │ Services      │ │ DTOs     │ │ Validators          │  │
-│   │ (Use Cases)   │ │          │ │ (FluentValidation)  │  │
-│   └──────┬───────┘ └──────────┘ └────────────────────┘  │
-│          │                                               │
-│   ┌──────▼───────┐                                       │
-│   │ Interfaces    │  ← Dependency Inversion              │
-│   └──────┬───────┘                                       │
-└──────────┼──────────────────────────────────────────────┘
-           │
-┌──────────▼──────────────────────────────────────────────┐
-│              PickleballApp.Domain                         │
-│   ┌──────────────┐ ┌──────────┐ ┌────────────────────┐  │
-│   │ Entities      │ │ Enums    │ │ Value Objects       │  │
-│   │ (POCO)        │ │          │ │ Score, Rating...    │  │
-│   └──────────────┘ └──────────┘ └────────────────────┘  │
-│   ┌──────────────┐ ┌──────────────────────────────────┐  │
-│   │ Domain Events │ │ Domain Exceptions                │  │
-│   └──────────────┘ └──────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-           ▲
-┌──────────┼──────────────────────────────────────────────┐
-│              PickleballApp.Infrastructure                 │
-│   ┌──────────────┐ ┌──────────┐ ┌────────────────────┐  │
-│   │ EF Core       │ │ Redis    │ │ Cloudinary          │  │
-│   │ DbContext     │ │ Cache    │ │ File Storage        │  │
-│   │ Repositories  │ │ Service  │ │ Service (Miễn phí)  │  │
-│   └──────────────┘ └──────────┘ └────────────────────┘  │
-│   ┌──────────────┐ ┌──────────┐ ┌────────────────────┐  │
-│   │ FCM Push      │ │ Email    │ │ Background Jobs     │  │
-│   │ Notification  │ │ Service  │ │ (Hosted Services)   │  │
-│   └──────────────┘ └──────────┘ └────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-```
 
-### 1.2. Nguyên tắc kiến trúc
+**Interfaces tách nhỏ trong project:**
+
+| Interface | Mô tả |
+|-----------|-------|
+| `ICurrentUserService` | Chỉ lấy thông tin user hiện tại |
+| `ICacheService` | Chỉ cache operations |
+| `IPushNotificationService` | Chỉ gửi push notification |
+| `IEmailService` | Chỉ gửi email |
+| `ISocialAuthProvider` | Chỉ validate OAuth token |
+| `IEmailVerificationService` | Chỉ gửi/xác thực OTP |
+
+#### D — Dependency Inversion Principle (DIP)
+
+> **Tầng cao (Application) không phụ thuộc tầng thấp (Infrastructure). Cả hai phụ thuộc Abstraction.**
+
+`
+Application (high-level)
+    ├── Defines: ISocialAuthProvider, IEmailService, ICacheService
+    └── Uses: ISocialAuthProvider (không biết implementation)
+
+Infrastructure (low-level)
+    ├── Implements: GoogleAuthProvider, FacebookAuthProvider
+    ├── Implements: SendGridEmailService, CloudinaryCacheService
+    └── References: Application (để biết interface)
+`
+
+``csharp
+// Application layer — chỉ biết interface
+public class AuthService
+{
+    private readonly ISocialAuthProvider _socialAuth;     // Không biết Google hay Facebook
+    private readonly IEmailService _emailService;         // Không biết SendGrid hay SMTP
+    private readonly IApplicationDbContext _db;            // Không biết PostgreSQL hay SQLite
+}
+
+// Infrastructure layer — implement interface
+public class SendGridEmailService : IEmailService
+{
+    public async Task SendAsync(string to, string subject, string body) { ... }
+}
+``
+
+#### Các nguyên tắc bổ sung
 
 | Nguyên tắc | Áp dụng |
 |------------|---------|
-| **Dependency Inversion** | Tầng trong (Domain, Application) không phụ thuộc tầng ngoài (Infrastructure) |
-| **Single Responsibility** | Mỗi Service xử lý 1 aggregate/module |
-| **Interface Segregation** | Interface nhỏ, chuyên biệt (ITournamentRepository, IMatchRepository) |
 | **Repository Pattern** | Trừu tượng hóa data access, dễ test và thay đổi ORM |
 | **CQRS nhẹ** | Tách Read DTOs và Write Commands (không cần Event Sourcing) |
+| **Strategy Pattern** | ISocialAuthProvider cho multi-provider OAuth |
+| **Factory Pattern** | Resolve đúng provider dựa trên ProviderName |
 
 ### 1.3. Dependency Flow
 
-```
-API → Application → Domain
- ↓                    ↑
-Infrastructure ───────┘ (implements interfaces from Application)
-```
+``
+API ? Application ? Domain
+ ?                    ?
+Infrastructure -------+ (implements interfaces from Application)
+``
 
-- **API** tham chiếu: Application, Infrastructure (cho DI registration)
-- **Application** tham chiếu: Domain
-- **Infrastructure** tham chiếu: Application (implement interfaces), Domain (sử dụng entities)
-- **Domain** không tham chiếu project nào → hoàn toàn độc lập
+- **API** tham chi?u: Application, Infrastructure (cho DI registration)
+- **Application** tham chi?u: Domain
+- **Infrastructure** tham chi?u: Application (implement interfaces), Domain (s? d?ng entities)
+- **Domain** kh�ng tham chi?u project n�o ? ho�n to�n d?c l?p
 
 ---
 
-## 2. Chi Tiết Từng Tầng
+## 2. Chi Ti?t T?ng T?ng
 
-### 2.1. Domain Layer — `PickleballApp.Domain`
+### 2.1. Domain Layer � `PickleballApp.Domain`
 
-```
+``
 PickleballApp.Domain/
-├── Entities/
-│   ├── User.cs
-│   ├── Tournament.cs
-│   ├── Participant.cs
-│   ├── Team.cs
-│   ├── Group.cs
-│   ├── GroupMember.cs
-│   ├── Match.cs
-│   ├── CommunityGame.cs
-│   ├── GameParticipant.cs
-│   ├── ChatRoom.cs
-│   ├── ChatMember.cs
-│   ├── Message.cs
-│   ├── Notification.cs
-│   ├── Follow.cs
-│   └── RefreshToken.cs
-├── Enums/
-│   ├── TournamentType.cs          // Singles, Doubles
-│   ├── TournamentStatus.cs        // Draft, Open, Ready, InProgress, Completed, Cancelled
-│   ├── ScoringFormat.cs           // BestOf1, BestOf3
-│   ├── ParticipantStatus.cs       // Confirmed, InvitedPending, RequestPending, Rejected
-│   ├── MatchStatus.cs             // Scheduled, InProgress, Completed, Walkover
-│   ├── GameStatus.cs              // Open, Full, InProgress, Completed, Cancelled
-│   ├── GameParticipantStatus.cs   // Confirmed, Waitlist, InvitedPending, Cancelled
-│   ├── ChatRoomType.cs            // Direct, Group
-│   ├── MessageType.cs             // Text, Image, System
-│   └── NotificationType.cs        // TournamentInvite, RequestApproved, MatchResult, ...
-├── ValueObjects/
-│   ├── SetScore.cs                // { Player1Score: int, Player2Score: int }
-│   ├── MatchScore.cs              // List<SetScore>, WinnerId
-│   └── Location.cs                // { Address: string, Lat: decimal, Lng: decimal }
-├── Events/
-│   ├── TournamentCreatedEvent.cs
-│   ├── MatchCompletedEvent.cs
-│   ├── ParticipantJoinedEvent.cs
-│   └── ScoreUpdatedEvent.cs
-├── Exceptions/
-│   ├── DomainException.cs
-│   ├── TournamentFullException.cs
-│   ├── InvalidScoreException.cs
-│   └── InvalidStatusTransitionException.cs
-└── Common/
-    ├── BaseEntity.cs              // Id, CreatedAt, UpdatedAt
-    └── IAuditableEntity.cs
-```
++-- Entities/
+�   +-- User.cs
+�   +-- Tournament.cs
+�   +-- Participant.cs
+�   +-- Team.cs
+�   +-- Group.cs
+�   +-- GroupMember.cs
+�   +-- Match.cs
+�   +-- CommunityGame.cs
+�   +-- GameParticipant.cs
+�   +-- ChatRoom.cs
+�   +-- ChatMember.cs
+�   +-- Message.cs
+�   +-- Notification.cs
+�   +-- Follow.cs
+�   +-- RefreshToken.cs
++-- Enums/
+�   +-- TournamentType.cs          // Singles, Doubles
+�   +-- TournamentStatus.cs        // Draft, Open, Ready, InProgress, Completed, Cancelled
+�   +-- ScoringFormat.cs           // BestOf1, BestOf3
+�   +-- ParticipantStatus.cs       // Confirmed, InvitedPending, RequestPending, Rejected
+�   +-- MatchStatus.cs             // Scheduled, InProgress, Completed, Walkover
+�   +-- GameStatus.cs              // Open, Full, InProgress, Completed, Cancelled
+�   +-- GameParticipantStatus.cs   // Confirmed, Waitlist, InvitedPending, Cancelled
+�   +-- ChatRoomType.cs            // Direct, Group
+�   +-- MessageType.cs             // Text, Image, System
+�   +-- NotificationType.cs        // TournamentInvite, RequestApproved, MatchResult, ...
++-- ValueObjects/
+�   +-- SetScore.cs                // { Player1Score: int, Player2Score: int }
+�   +-- MatchScore.cs              // List<SetScore>, WinnerId
+�   +-- Location.cs                // { Address: string, Lat: decimal, Lng: decimal }
++-- Events/
+�   +-- TournamentCreatedEvent.cs
+�   +-- MatchCompletedEvent.cs
+�   +-- ParticipantJoinedEvent.cs
+�   +-- ScoreUpdatedEvent.cs
++-- Exceptions/
+�   +-- DomainException.cs
+�   +-- TournamentFullException.cs
+�   +-- InvalidScoreException.cs
+�   +-- InvalidStatusTransitionException.cs
++-- Common/
+    +-- BaseEntity.cs              // Id, CreatedAt, UpdatedAt
+    +-- IAuditableEntity.cs
+``
 
-**Ví dụ Entity:**
+**V� d? Entity:**
 
-```csharp
+``csharp
 // Entities/Tournament.cs
 public class Tournament : BaseEntity
 {
@@ -202,11 +384,11 @@ public class Tournament : BaseEntity
             throw new InvalidStatusTransitionException(Status, newStatus);
     }
 }
-```
+``
 
-**Ví dụ Value Object:**
+**V� d? Value Object:**
 
-```csharp
+``csharp
 // ValueObjects/SetScore.cs
 public record SetScore(int Player1Score, int Player2Score)
 {
@@ -217,7 +399,7 @@ public record SetScore(int Player1Score, int Player2Score)
         var maxScore = Math.Max(Player1Score, Player2Score);
         var minScore = Math.Min(Player1Score, Player2Score);
 
-        // Thắng set khi đạt 11 điểm, cách biệt ít nhất 2
+        // Th?ng set khi d?t 11 di?m, c�ch bi?t �t nh?t 2
         if (maxScore < 11) return false;
         if (maxScore == 11 && minScore > 9) return false;
         if (maxScore > 11 && maxScore - minScore != 2) return false;
@@ -228,115 +410,115 @@ public record SetScore(int Player1Score, int Player2Score)
     public int? GetWinnerId(int player1Id, int player2Id)
         => Player1Score > Player2Score ? player1Id : player2Id;
 }
-```
+``
 
-### 2.2. Application Layer — `PickleballApp.Application`
+### 2.2. Application Layer � `PickleballApp.Application`
 
-```
+``
 PickleballApp.Application/
-├── Common/
-│   ├── Interfaces/
-│   │   ├── IApplicationDbContext.cs
-│   │   ├── ICurrentUserService.cs
-│   │   ├── ICacheService.cs
-│   │   ├── IFileStorageService.cs
-│   │   ├── IPushNotificationService.cs
-│   │   └── IEmailService.cs
-│   ├── Models/
-│   │   ├── PagedResult<T>.cs
-│   │   ├── Result<T>.cs
-│   │   └── PaginationParams.cs
-│   ├── Mappings/
-│   │   └── MappingProfile.cs        // AutoMapper profiles
-│   └── Exceptions/
-│       ├── NotFoundException.cs
-│       ├── ForbiddenException.cs
-│       └── ValidationException.cs
-├── Auth/
-│   ├── DTOs/
-│   │   ├── RegisterRequest.cs
-│   │   ├── LoginRequest.cs
-│   │   ├── AuthResponse.cs
-│   │   └── RefreshTokenRequest.cs
-│   ├── Validators/
-│   │   ├── RegisterRequestValidator.cs
-│   │   └── LoginRequestValidator.cs
-│   └── Services/
-│       ├── IAuthService.cs
-│       └── AuthService.cs
-├── Users/
-│   ├── DTOs/
-│   │   ├── UserProfileDto.cs
-│   │   ├── UpdateProfileRequest.cs
-│   │   └── UserSummaryDto.cs
-│   ├── Validators/
-│   │   └── UpdateProfileValidator.cs
-│   └── Services/
-│       ├── IUserService.cs
-│       └── UserService.cs
-├── Tournaments/
-│   ├── DTOs/
-│   │   ├── CreateTournamentRequest.cs
-│   │   ├── UpdateTournamentRequest.cs
-│   │   ├── TournamentDto.cs
-│   │   ├── TournamentListDto.cs
-│   │   ├── TournamentFilterParams.cs
-│   │   ├── InvitePlayerRequest.cs
-│   │   ├── GroupAssignmentRequest.cs
-│   │   └── TeamAssignmentRequest.cs
-│   ├── Validators/
-│   │   ├── CreateTournamentValidator.cs
-│   │   └── UpdateTournamentValidator.cs
-│   └── Services/
-│       ├── ITournamentService.cs
-│       ├── TournamentService.cs
-│       ├── IParticipantService.cs
-│       ├── ParticipantService.cs
-│       ├── ITeamService.cs
-│       ├── TeamService.cs
-│       ├── IGroupService.cs
-│       └── GroupService.cs
-├── Matches/
-│   ├── DTOs/
-│   │   ├── MatchDto.cs
-│   │   ├── SubmitScoreRequest.cs
-│   │   ├── StandingsDto.cs
-│   │   └── TournamentResultsDto.cs
-│   ├── Validators/
-│   │   └── SubmitScoreValidator.cs
-│   └── Services/
-│       ├── IMatchService.cs
-│       ├── MatchService.cs
-│       ├── IStandingsService.cs
-│       ├── StandingsService.cs
-│       └── RoundRobinGenerator.cs     // Tạo lịch thi đấu Round Robin
-├── Community/
-│   ├── DTOs/
-│   │   ├── CreateGameRequest.cs
-│   │   ├── GameDto.cs
-│   │   └── GameFilterParams.cs
-│   └── Services/
-│       ├── ICommunityGameService.cs
-│       └── CommunityGameService.cs
-├── Chat/
-│   ├── DTOs/
-│   │   ├── ChatRoomDto.cs
-│   │   ├── MessageDto.cs
-│   │   └── SendMessageRequest.cs
-│   └── Services/
-│       ├── IChatService.cs
-│       └── ChatService.cs
-└── Notifications/
-    ├── DTOs/
-    │   └── NotificationDto.cs
-    └── Services/
-        ├── INotificationService.cs
-        └── NotificationService.cs
-```
++-- Common/
+�   +-- Interfaces/
+�   �   +-- IApplicationDbContext.cs
+�   �   +-- ICurrentUserService.cs
+�   �   +-- ICacheService.cs
+�   �   +-- IFileStorageService.cs
+�   �   +-- IPushNotificationService.cs
+�   �   +-- IEmailService.cs
+�   +-- Models/
+�   �   +-- PagedResult<T>.cs
+�   �   +-- Result<T>.cs
+�   �   +-- PaginationParams.cs
+�   +-- Mappings/
+�   �   +-- MappingProfile.cs        // AutoMapper profiles
+�   +-- Exceptions/
+�       +-- NotFoundException.cs
+�       +-- ForbiddenException.cs
+�       +-- ValidationException.cs
++-- Auth/
+�   +-- DTOs/
+�   �   +-- RegisterRequest.cs
+�   �   +-- LoginRequest.cs
+�   �   +-- AuthResponse.cs
+�   �   +-- RefreshTokenRequest.cs
+�   +-- Validators/
+�   �   +-- RegisterRequestValidator.cs
+�   �   +-- LoginRequestValidator.cs
+�   +-- Services/
+�       +-- IAuthService.cs
+�       +-- AuthService.cs
++-- Users/
+�   +-- DTOs/
+�   �   +-- UserProfileDto.cs
+�   �   +-- UpdateProfileRequest.cs
+�   �   +-- UserSummaryDto.cs
+�   +-- Validators/
+�   �   +-- UpdateProfileValidator.cs
+�   +-- Services/
+�       +-- IUserService.cs
+�       +-- UserService.cs
++-- Tournaments/
+�   +-- DTOs/
+�   �   +-- CreateTournamentRequest.cs
+�   �   +-- UpdateTournamentRequest.cs
+�   �   +-- TournamentDto.cs
+�   �   +-- TournamentListDto.cs
+�   �   +-- TournamentFilterParams.cs
+�   �   +-- InvitePlayerRequest.cs
+�   �   +-- GroupAssignmentRequest.cs
+�   �   +-- TeamAssignmentRequest.cs
+�   +-- Validators/
+�   �   +-- CreateTournamentValidator.cs
+�   �   +-- UpdateTournamentValidator.cs
+�   +-- Services/
+�       +-- ITournamentService.cs
+�       +-- TournamentService.cs
+�       +-- IParticipantService.cs
+�       +-- ParticipantService.cs
+�       +-- ITeamService.cs
+�       +-- TeamService.cs
+�       +-- IGroupService.cs
+�       +-- GroupService.cs
++-- Matches/
+�   +-- DTOs/
+�   �   +-- MatchDto.cs
+�   �   +-- SubmitScoreRequest.cs
+�   �   +-- StandingsDto.cs
+�   �   +-- TournamentResultsDto.cs
+�   +-- Validators/
+�   �   +-- SubmitScoreValidator.cs
+�   +-- Services/
+�       +-- IMatchService.cs
+�       +-- MatchService.cs
+�       +-- IStandingsService.cs
+�       +-- StandingsService.cs
+�       +-- RoundRobinGenerator.cs     // T?o l?ch thi d?u Round Robin
++-- Community/
+�   +-- DTOs/
+�   �   +-- CreateGameRequest.cs
+�   �   +-- GameDto.cs
+�   �   +-- GameFilterParams.cs
+�   +-- Services/
+�       +-- ICommunityGameService.cs
+�       +-- CommunityGameService.cs
++-- Chat/
+�   +-- DTOs/
+�   �   +-- ChatRoomDto.cs
+�   �   +-- MessageDto.cs
+�   �   +-- SendMessageRequest.cs
+�   +-- Services/
+�       +-- IChatService.cs
+�       +-- ChatService.cs
++-- Notifications/
+    +-- DTOs/
+    �   +-- NotificationDto.cs
+    +-- Services/
+        +-- INotificationService.cs
+        +-- NotificationService.cs
+``
 
-**Ví dụ Service:**
+**V� d? Service:**
 
-```csharp
+``csharp
 // Tournaments/Services/TournamentService.cs
 public class TournamentService : ITournamentService
 {
@@ -380,102 +562,102 @@ public class TournamentService : ITournamentService
 
         tournament.ValidateStatusTransition(newStatus);
 
-        // Validate điều kiện chuyển trạng thái
+        // Validate di?u ki?n chuy?n tr?ng th�i
         if (newStatus == TournamentStatus.Ready)
         {
             var confirmedCount = tournament.Participants.Count(p => p.Status == ParticipantStatus.Confirmed);
             if (confirmedCount < tournament.NumGroups * 4)
-                throw new DomainException("Chưa đủ người tham gia để chuyển sang trạng thái sẵn sàng");
+                throw new DomainException("Chua d? ngu?i tham gia d? chuy?n sang tr?ng th�i s?n s�ng");
             if (!tournament.Groups.Any())
-                throw new DomainException("Chưa xếp bảng");
+                throw new DomainException("Chua x?p b?ng");
         }
 
         tournament.Status = newStatus;
         await _db.SaveChangesAsync();
 
-        // Thông báo cho tất cả người tham gia
+        // Th�ng b�o cho t?t c? ngu?i tham gia
         await _notification.NotifyTournamentStatusChanged(tournament);
     }
 }
-```
+``
 
-**Ví dụ Round Robin Generator:**
+**V� d? Round Robin Generator:**
 
-```csharp
+``csharp
 // Matches/Services/RoundRobinGenerator.cs
 public static class RoundRobinGenerator
 {
     /// <summary>
-    /// Tạo lịch Round Robin cho 1 bảng 4 đơn vị.
-    /// Pattern cố định:
-    ///   Vòng 1: A vs B, C vs D
-    ///   Vòng 2: A vs C, B vs D
-    ///   Vòng 3: A vs D, B vs C
+    /// T?o l?ch Round Robin cho 1 b?ng 4 don v?.
+    /// Pattern c? d?nh:
+    ///   V�ng 1: A vs B, C vs D
+    ///   V�ng 2: A vs C, B vs D
+    ///   V�ng 3: A vs D, B vs C
     /// </summary>
     public static List<Match> Generate(int tournamentId, Group group, List<int> memberIds)
     {
         if (memberIds.Count != 4)
-            throw new DomainException("Mỗi bảng phải có đúng 4 đơn vị");
+            throw new DomainException("M?i b?ng ph?i c� d�ng 4 don v?");
 
         var (a, b, c, d) = (memberIds[0], memberIds[1], memberIds[2], memberIds[3]);
 
         return new List<Match>
         {
-            // Vòng 1
+            // V�ng 1
             new() { TournamentId = tournamentId, GroupId = group.Id, Round = 1, MatchOrder = 1, Player1Id = a, Player2Id = b },
             new() { TournamentId = tournamentId, GroupId = group.Id, Round = 1, MatchOrder = 2, Player1Id = c, Player2Id = d },
-            // Vòng 2
+            // V�ng 2
             new() { TournamentId = tournamentId, GroupId = group.Id, Round = 2, MatchOrder = 1, Player1Id = a, Player2Id = c },
             new() { TournamentId = tournamentId, GroupId = group.Id, Round = 2, MatchOrder = 2, Player1Id = b, Player2Id = d },
-            // Vòng 3
+            // V�ng 3
             new() { TournamentId = tournamentId, GroupId = group.Id, Round = 3, MatchOrder = 1, Player1Id = a, Player2Id = d },
             new() { TournamentId = tournamentId, GroupId = group.Id, Round = 3, MatchOrder = 2, Player1Id = b, Player2Id = c },
         };
     }
 }
-```
+``
 
-### 2.3. Infrastructure Layer — `PickleballApp.Infrastructure`
+### 2.3. Infrastructure Layer � `PickleballApp.Infrastructure`
 
-```
+``
 PickleballApp.Infrastructure/
-├── Data/
-│   ├── AppDbContext.cs
-│   ├── Configurations/             # EF Core Fluent API configurations
-│   │   ├── UserConfiguration.cs
-│   │   ├── TournamentConfiguration.cs
-│   │   ├── ParticipantConfiguration.cs
-│   │   ├── TeamConfiguration.cs
-│   │   ├── GroupConfiguration.cs
-│   │   ├── GroupMemberConfiguration.cs
-│   │   ├── MatchConfiguration.cs
-│   │   ├── CommunityGameConfiguration.cs
-│   │   ├── ChatRoomConfiguration.cs
-│   │   ├── MessageConfiguration.cs
-│   │   ├── NotificationConfiguration.cs
-│   │   └── FollowConfiguration.cs
-│   └── Interceptors/
-│       └── AuditableEntityInterceptor.cs  # Tự động set CreatedAt/UpdatedAt
-├── Repositories/                   # (Optional nếu dùng DbContext trực tiếp)
-├── Services/
-│   ├── CurrentUserService.cs       # Lấy user từ HttpContext.User claims
-│   ├── CacheService.cs             # Redis cache implementation
-│   ├── FileStorageService.cs       # Cloudinary upload/download
-│   ├── PushNotificationService.cs  # FCM integration
-│   ├── EmailService.cs             # SMTP / SendGrid
-│   └── JwtTokenService.cs          # Generate/validate JWT + Refresh Token
-├── BackgroundJobs/
-│   ├── RankingRecalculationJob.cs
-│   ├── NotificationCleanupJob.cs
-│   └── ExpiredTokenCleanupJob.cs
-├── Migrations/
-│   └── ... (EF Core migrations)
-└── DependencyInjection.cs          # Extension method cho IServiceCollection
-```
++-- Data/
+�   +-- AppDbContext.cs
+�   +-- Configurations/             # EF Core Fluent API configurations
+�   �   +-- UserConfiguration.cs
+�   �   +-- TournamentConfiguration.cs
+�   �   +-- ParticipantConfiguration.cs
+�   �   +-- TeamConfiguration.cs
+�   �   +-- GroupConfiguration.cs
+�   �   +-- GroupMemberConfiguration.cs
+�   �   +-- MatchConfiguration.cs
+�   �   +-- CommunityGameConfiguration.cs
+�   �   +-- ChatRoomConfiguration.cs
+�   �   +-- MessageConfiguration.cs
+�   �   +-- NotificationConfiguration.cs
+�   �   +-- FollowConfiguration.cs
+�   +-- Interceptors/
+�       +-- AuditableEntityInterceptor.cs  # T? d?ng set CreatedAt/UpdatedAt
++-- Repositories/                   # (Optional n?u d�ng DbContext tr?c ti?p)
++-- Services/
+�   +-- CurrentUserService.cs       # L?y user t? HttpContext.User claims
+�   +-- CacheService.cs             # Redis cache implementation
+�   +-- FileStorageService.cs       # Cloudinary upload/download
+�   +-- PushNotificationService.cs  # FCM integration
+�   +-- EmailService.cs             # SMTP / SendGrid
+�   +-- JwtTokenService.cs          # Generate/validate JWT + Refresh Token
++-- BackgroundJobs/
+�   +-- RankingRecalculationJob.cs
+�   +-- NotificationCleanupJob.cs
+�   +-- ExpiredTokenCleanupJob.cs
++-- Migrations/
+�   +-- ... (EF Core migrations)
++-- DependencyInjection.cs          # Extension method cho IServiceCollection
+``
 
-**Ví dụ DbContext:**
+**V� d? DbContext:**
 
-```csharp
+``csharp
 // Data/AppDbContext.cs
 public class AppDbContext : DbContext, IApplicationDbContext
 {
@@ -500,46 +682,46 @@ public class AppDbContext : DbContext, IApplicationDbContext
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(AppDbContext).Assembly);
     }
 }
-```
+``
 
-### 2.4. API Layer — `PickleballApp.API`
+### 2.4. API Layer � `PickleballApp.API`
 
-```
+``
 PickleballApp.API/
-├── Controllers/
-│   ├── AuthController.cs
-│   ├── UsersController.cs
-│   ├── TournamentsController.cs
-│   ├── ParticipantsController.cs
-│   ├── TeamsController.cs
-│   ├── GroupsController.cs
-│   ├── MatchesController.cs
-│   ├── CommunityGamesController.cs
-│   ├── ChatsController.cs
-│   └── NotificationsController.cs
-├── Hubs/
-│   ├── TournamentHub.cs
-│   ├── ChatHub.cs
-│   └── NotificationHub.cs
-├── Middleware/
-│   ├── ExceptionHandlingMiddleware.cs
-│   ├── RequestLoggingMiddleware.cs
-│   └── RateLimitingMiddleware.cs
-├── Filters/
-│   ├── ValidationFilter.cs
-│   └── TournamentCreatorFilter.cs    # Kiểm tra quyền Creator
-├── Extensions/
-│   ├── ServiceCollectionExtensions.cs
-│   └── WebApplicationExtensions.cs
-├── appsettings.json
-├── appsettings.Development.json
-├── appsettings.Production.json
-└── Program.cs
-```
++-- Controllers/
+�   +-- AuthController.cs
+�   +-- UsersController.cs
+�   +-- TournamentsController.cs
+�   +-- ParticipantsController.cs
+�   +-- TeamsController.cs
+�   +-- GroupsController.cs
+�   +-- MatchesController.cs
+�   +-- CommunityGamesController.cs
+�   +-- ChatsController.cs
+�   +-- NotificationsController.cs
++-- Hubs/
+�   +-- TournamentHub.cs
+�   +-- ChatHub.cs
+�   +-- NotificationHub.cs
++-- Middleware/
+�   +-- ExceptionHandlingMiddleware.cs
+�   +-- RequestLoggingMiddleware.cs
+�   +-- RateLimitingMiddleware.cs
++-- Filters/
+�   +-- ValidationFilter.cs
+�   +-- TournamentCreatorFilter.cs    # Ki?m tra quy?n Creator
++-- Extensions/
+�   +-- ServiceCollectionExtensions.cs
+�   +-- WebApplicationExtensions.cs
++-- appsettings.json
++-- appsettings.Development.json
++-- appsettings.Production.json
++-- Program.cs
+``
 
-**Ví dụ Controller:**
+**V� d? Controller:**
 
-```csharp
+``csharp
 // Controllers/TournamentsController.cs
 [ApiController]
 [Route("api/tournaments")]
@@ -585,11 +767,11 @@ public class TournamentsController : ControllerBase
         return NoContent();
     }
 }
-```
+``
 
-**Ví dụ Program.cs:**
+**V� d? Program.cs:**
 
-```csharp
+``csharp
 // Program.cs
 var builder = WebApplication.CreateBuilder(args);
 
@@ -624,7 +806,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
                 Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Key"]!))
         };
 
-        // SignalR JWT: đọc token từ query string
+        // SignalR JWT: d?c token t? query string
         options.Events = new JwtBearerEvents
         {
             OnMessageReceived = context =>
@@ -697,7 +879,7 @@ app.MapHub<NotificationHub>("/hubs/notification");
 app.MapHealthChecks("/health");
 
 app.Run();
-```
+``
 
 ---
 
@@ -705,7 +887,7 @@ app.Run();
 
 ### 3.1. Exception Handling
 
-```csharp
+``csharp
 // Middleware/ExceptionHandlingMiddleware.cs
 public class ExceptionHandlingMiddleware
 {
@@ -754,40 +936,40 @@ public class ExceptionHandlingMiddleware
         }
     }
 }
-```
+``
 
-### 3.2. Validation — FluentValidation
+### 3.2. Validation � FluentValidation
 
-```csharp
+``csharp
 // Tournaments/Validators/CreateTournamentValidator.cs
 public class CreateTournamentValidator : AbstractValidator<CreateTournamentRequest>
 {
     public CreateTournamentValidator()
     {
         RuleFor(x => x.Name)
-            .NotEmpty().WithMessage("Tên giải đấu không được để trống")
+            .NotEmpty().WithMessage("T�n gi?i d?u kh�ng du?c d? tr?ng")
             .MaximumLength(200);
 
         RuleFor(x => x.Type)
-            .IsInEnum().WithMessage("Loại giải phải là Singles hoặc Doubles");
+            .IsInEnum().WithMessage("Lo?i gi?i ph?i l� Singles ho?c Doubles");
 
         RuleFor(x => x.NumGroups)
             .InclusiveBetween(1, 4).When(x => x.Type == TournamentType.Singles)
-            .WithMessage("Đấu đơn: 1-4 bảng");
+            .WithMessage("�?u don: 1-4 b?ng");
 
         RuleFor(x => x.NumGroups)
             .InclusiveBetween(1, 2).When(x => x.Type == TournamentType.Doubles)
-            .WithMessage("Đấu đôi: 1-2 bảng");
+            .WithMessage("�?u d�i: 1-2 b?ng");
 
         RuleFor(x => x.ScoringFormat)
             .IsInEnum();
     }
 }
-```
+``
 
-### 3.3. Logging — Serilog
+### 3.3. Logging � Serilog
 
-```json
+``json
 // appsettings.json
 {
   "Serilog": {
@@ -806,12 +988,12 @@ public class CreateTournamentValidator : AbstractValidator<CreateTournamentReque
     "Enrich": ["FromLogContext", "WithMachineName", "WithThreadId"]
   }
 }
-```
+``
 
-### 3.4. API Response Format chuẩn
+### 3.4. API Response Format chu?n
 
-```
-// Thành công
+``
+// Th�nh c�ng
 {
   "data": { ... },
   "meta": {
@@ -822,26 +1004,26 @@ public class CreateTournamentValidator : AbstractValidator<CreateTournamentReque
   }
 }
 
-// Lỗi — RFC 7807 Problem Details
+// L?i � RFC 7807 Problem Details
 {
   "type": "https://tools.ietf.org/html/rfc7807",
   "title": "Validation Error",
   "status": 400,
-  "detail": "Một hoặc nhiều lỗi validation xảy ra",
+  "detail": "M?t ho?c nhi?u l?i validation x?y ra",
   "errors": {
-    "Name": ["Tên giải đấu không được để trống"],
-    "NumGroups": ["Đấu đơn: 1-4 bảng"]
+    "Name": ["T�n gi?i d?u kh�ng du?c d? tr?ng"],
+    "NumGroups": ["�?u don: 1-4 b?ng"]
   }
 }
-```
+``
 
 ---
 
-## 4. Realtime — SignalR
+## 4. Realtime � SignalR
 
 ### 4.1. TournamentHub
 
-```csharp
+``csharp
 // Hubs/TournamentHub.cs
 [Authorize]
 public class TournamentHub : Hub
@@ -856,7 +1038,7 @@ public class TournamentHub : Hub
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, $"tournament:{tournamentId}");
     }
 
-    // Gọi từ MatchService khi nhập điểm
+    // G?i t? MatchService khi nh?p di?m
     public static async Task BroadcastScoreUpdate(
         IHubContext<TournamentHub> hub, Guid tournamentId, MatchDto match)
     {
@@ -871,11 +1053,11 @@ public class TournamentHub : Hub
             .SendAsync("StandingsUpdated", new { groupId, standings });
     }
 }
-```
+``
 
 ### 4.2. ChatHub
 
-```csharp
+``csharp
 // Hubs/ChatHub.cs
 [Authorize]
 public class ChatHub : Hub
@@ -910,11 +1092,11 @@ public class ChatHub : Hub
             await Groups.AddToGroupAsync(Context.ConnectionId, $"chat:{roomId}");
     }
 }
-```
+``
 
 ### 4.3. NotificationHub
 
-```csharp
+``csharp
 // Hubs/NotificationHub.cs
 [Authorize]
 public class NotificationHub : Hub
@@ -925,7 +1107,7 @@ public class NotificationHub : Hub
         await Groups.AddToGroupAsync(Context.ConnectionId, $"user:{userId}");
     }
 
-    // Gọi từ NotificationService
+    // G?i t? NotificationService
     public static async Task SendToUser(
         IHubContext<NotificationHub> hub, Guid userId, NotificationDto notification)
     {
@@ -933,33 +1115,33 @@ public class NotificationHub : Hub
             .SendAsync("NewNotification", notification);
     }
 }
-```
+``
 
-### 4.4. SignalR Scale-out với Redis
+### 4.4. SignalR Scale-out v?i Redis
 
-```csharp
-// Program.cs — đã config ở trên
+``csharp
+// Program.cs � d� config ? tr�n
 builder.Services.AddSignalR()
     .AddStackExchangeRedis(builder.Configuration.GetConnectionString("Redis")!, options =>
     {
         options.Configuration.ChannelPrefix = RedisChannel.Literal("PickleballApp");
     });
-```
+``
 
-Khi chạy nhiều instance API, Redis Backplane đảm bảo message được gửi đến tất cả clients bất kể đang kết nối vào instance nào.
+Khi ch?y nhi?u instance API, Redis Backplane d?m b?o message du?c g?i d?n t?t c? clients b?t k? dang k?t n?i v�o instance n�o.
 
 ---
 
 ## 5. Background Jobs & Queue
 
-### 5.1. Sử dụng .NET BackgroundService (đơn giản, Phase 1)
+### 5.1. S? d?ng .NET BackgroundService (don gi?n, Phase 1)
 
-```csharp
+``csharp
 // BackgroundJobs/RankingRecalculationJob.cs
 public class RankingRecalculationJob : BackgroundService
 {
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly Channel<Guid> _channel; // tournamentId cần tính lại
+    private readonly Channel<Guid> _channel; // tournamentId c?n t�nh l?i
 
     protected override async Task ExecuteAsync(CancellationToken ct)
     {
@@ -971,28 +1153,28 @@ public class RankingRecalculationJob : BackgroundService
         }
     }
 }
-```
+``
 
-### 5.2. Các Job cần xử lý
+### 5.2. C�c Job c?n x? l�
 
-| Job | Trigger | Mô tả |
+| Job | Trigger | M� t? |
 |-----|---------|--------|
-| `RankingRecalculationJob` | Sau khi nhập/sửa điểm | Tính lại BXH bảng + kiểm tra giải hoàn thành |
-| `NotificationDispatchJob` | Khi có event mới | Gửi push notification qua FCM + lưu in-app notification |
-| `ExpiredTokenCleanupJob` | Hàng ngày (cron) | Xóa refresh tokens đã hết hạn |
-| `NotificationCleanupJob` | Hàng tuần (cron) | Xóa notifications cũ hơn 90 ngày |
-| `ImageResizeJob` | Upload avatar/banner | Resize + compress trước khi lưu Cloudinary |
+| `RankingRecalculationJob` | Sau khi nh?p/s?a di?m | T�nh l?i BXH b?ng + ki?m tra gi?i ho�n th�nh |
+| `NotificationDispatchJob` | Khi c� event m?i | G?i push notification qua FCM + luu in-app notification |
+| `ExpiredTokenCleanupJob` | H�ng ng�y (cron) | X�a refresh tokens d� h?t h?n |
+| `NotificationCleanupJob` | H�ng tu?n (cron) | X�a notifications cu hon 90 ng�y |
+| `ImageResizeJob` | Upload avatar/banner | Resize + compress tru?c khi luu Cloudinary |
 
-### 5.3. Nâng cấp lên RabbitMQ (Phase 2+, nếu cần)
+### 5.3. N�ng c?p l�n RabbitMQ (Phase 2+, n?u c?n)
 
-```
-Producer (API) → RabbitMQ Exchange → Queue → Consumer (Worker Service)
+``
+Producer (API) ? RabbitMQ Exchange ? Queue ? Consumer (Worker Service)
 
 Queues:
   - ranking.recalculate
   - notification.push
   - image.resize
-```
+``
 
 ---
 
@@ -1000,18 +1182,18 @@ Queues:
 
 ### 6.1. Redis Cache Layers
 
-| Key Pattern | TTL | Mô tả | Invalidation |
+| Key Pattern | TTL | M� t? | Invalidation |
 |-------------|-----|--------|--------------|
-| `tournaments:list:{filterHash}` | 5 phút | Danh sách giải đấu | Khi tạo/sửa/hủy giải |
-| `tournament:{id}` | 10 phút | Chi tiết 1 giải | Khi sửa giải |
-| `tournament:{id}:standings:{groupId}` | 1 phút | BXH bảng | Khi nhập/sửa điểm |
-| `tournament:{id}:matches` | 5 phút | Lịch thi đấu | Khi nhập/sửa điểm |
-| `user:{id}:profile` | 30 phút | Profile user | Khi sửa profile |
-| `user:{id}:unread-count` | Realtime | Số thông báo chưa đọc | Khi có notification mới / đọc |
+| `tournaments:list:{filterHash}` | 5 ph�t | Danh s�ch gi?i d?u | Khi t?o/s?a/h?y gi?i |
+| `tournament:{id}` | 10 ph�t | Chi ti?t 1 gi?i | Khi s?a gi?i |
+| `tournament:{id}:standings:{groupId}` | 1 ph�t | BXH b?ng | Khi nh?p/s?a di?m |
+| `tournament:{id}:matches` | 5 ph�t | L?ch thi d?u | Khi nh?p/s?a di?m |
+| `user:{id}:profile` | 30 ph�t | Profile user | Khi s?a profile |
+| `user:{id}:unread-count` | Realtime | S? th�ng b�o chua d?c | Khi c� notification m?i / d?c |
 
 ### 6.2. Cache Implementation
 
-```csharp
+``csharp
 // Services/CacheService.cs
 public class CacheService : ICacheService
 {
@@ -1042,17 +1224,17 @@ public class CacheService : ICacheService
         }
     }
 }
-```
+``
 
 ---
 
 ## 7. File Storage
 
-### 7.1. Cloudinary Service (Miễn phí)
+### 7.1. Cloudinary Service (Mi?n ph�)
 
-> **Tại sao chọn Cloudinary?** Gói miễn phí cung cấp 25 credits/tháng (~25 GB storage + transformations), tự động resize/crop/optimize hình ảnh qua URL, không cần tự host.
+> **T?i sao ch?n Cloudinary?** G�i mi?n ph� cung c?p 25 credits/th�ng (~25 GB storage + transformations), t? d?ng resize/crop/optimize h�nh ?nh qua URL, kh�ng c?n t? host.
 
-```csharp
+``csharp
 // Services/FileStorageService.cs
 // NuGet: CloudinaryDotNet
 public class FileStorageService : IFileStorageService
@@ -1075,7 +1257,7 @@ public class FileStorageService : IFileStorageService
             File = new FileDescription(fileName, stream),
             Folder = $"pickleball/{DateTime.UtcNow:yyyy/MM}",
             Transformation = new Transformation()
-                .Quality("auto").FetchFormat("auto") // Tự động tối ưu
+                .Quality("auto").FetchFormat("auto") // T? d?ng t?i uu
         };
 
         var result = await _cloudinary.UploadAsync(uploadParams);
@@ -1088,12 +1270,12 @@ public class FileStorageService : IFileStorageService
         await _cloudinary.DestroyAsync(new DeletionParams(publicId));
     }
 }
-```
+``
 
 ### 7.2. Image Processing
 
-```csharp
-// Dùng SkiaSharp hoặc ImageSharp
+``csharp
+// D�ng SkiaSharp ho?c ImageSharp
 public static class ImageProcessor
 {
     public static Stream ResizeAndCompress(Stream input, int maxWidth, int maxHeight, int quality = 80)
@@ -1111,15 +1293,15 @@ public static class ImageProcessor
         return output;
     }
 }
-```
+``
 
 ### 7.3. Upload Policies
 
-| Loại file | Max size | Kích thước output | Format |
+| Lo?i file | Max size | K�ch thu?c output | Format |
 |-----------|---------|-------------------|--------|
 | Avatar | 5 MB | 256x256 | WebP |
-| Banner giải đấu | 10 MB | 1200x630 | WebP |
-| Ảnh chứng minh điểm | 10 MB | 1920x1080 (max) | WebP |
+| Banner gi?i d?u | 10 MB | 1200x630 | WebP |
+| ?nh ch?ng minh di?m | 10 MB | 1920x1080 (max) | WebP |
 
 ---
 
@@ -1129,7 +1311,7 @@ public static class ImageProcessor
 
 **Backend Dockerfile:**
 
-```dockerfile
+``dockerfile
 # Build stage
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
@@ -1156,11 +1338,11 @@ COPY --from=build /app/publish .
 EXPOSE 8080
 ENV ASPNETCORE_URLS=http://+:8080
 ENTRYPOINT ["dotnet", "PickleballApp.API.dll"]
-```
+``
 
 **Docker Compose (Development):**
 
-```yaml
+``yaml
 # docker-compose.yml
 version: "3.8"
 
@@ -1223,11 +1405,11 @@ services:
 
 volumes:
   postgres_data:
-```
+``
 
-### 8.2. CI/CD Pipeline — GitHub Actions
+### 8.2. CI/CD Pipeline � GitHub Actions
 
-```yaml
+``yaml
 # .github/workflows/ci.yml
 name: CI/CD Pipeline
 
@@ -1243,7 +1425,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}/api
 
 jobs:
-  # ─── BUILD & TEST ─────────────────────────
+  # --- BUILD & TEST -------------------------
   build-and-test:
     runs-on: ubuntu-latest
     services:
@@ -1296,7 +1478,7 @@ jobs:
           path: "**/*.trx"
           reporter: dotnet-trx
 
-  # ─── CODE QUALITY ─────────────────────────
+  # --- CODE QUALITY -------------------------
   code-quality:
     runs-on: ubuntu-latest
     steps:
@@ -1308,7 +1490,7 @@ jobs:
       - name: Format Check
         run: dotnet format --verify-no-changes
 
-  # ─── DOCKER BUILD & PUSH ──────────────────
+  # --- DOCKER BUILD & PUSH ------------------
   docker:
     needs: [build-and-test, code-quality]
     if: github.event_name == 'push'
@@ -1336,7 +1518,7 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-  # ─── DEPLOY TO STAGING ────────────────────
+  # --- DEPLOY TO STAGING --------------------
   deploy-staging:
     needs: docker
     if: github.ref == 'refs/heads/develop'
@@ -1345,10 +1527,10 @@ jobs:
     steps:
       - name: Deploy to staging
         run: |
-          # SSH deploy hoặc kubectl apply hoặc docker compose pull
+          # SSH deploy ho?c kubectl apply ho?c docker compose pull
           echo "Deploying to staging..."
 
-  # ─── DEPLOY TO PRODUCTION ─────────────────
+  # --- DEPLOY TO PRODUCTION -----------------
   deploy-production:
     needs: docker
     if: github.ref == 'refs/heads/main'
@@ -1358,94 +1540,94 @@ jobs:
       - name: Deploy to production
         run: |
           echo "Deploying to production..."
-```
+``
 
 ### 8.3. Database Migration Strategy
 
-```bash
-# Tạo migration mới
+``bash
+# T?o migration m?i
 dotnet ef migrations add AddTournamentTable \
   --project src/PickleballApp.Infrastructure \
   --startup-project src/PickleballApp.API
 
-# Áp dụng migration
+# �p d?ng migration
 dotnet ef database update \
   --project src/PickleballApp.Infrastructure \
   --startup-project src/PickleballApp.API
 
-# Tạo migration SQL script (cho production)
+# T?o migration SQL script (cho production)
 dotnet ef migrations script \
   --project src/PickleballApp.Infrastructure \
   --startup-project src/PickleballApp.API \
   --idempotent \
   -o migrations.sql
-```
+``
 
 **Production Migration:**
-- KHÔNG chạy `ef database update` trực tiếp trên production
-- Export SQL script → review → chạy thủ công hoặc qua CI/CD approved step
-- Sử dụng flag `--idempotent` để script an toàn khi chạy lại
+- KH�NG ch?y `ef database update` tr?c ti?p tr�n production
+- Export SQL script ? review ? ch?y th? c�ng ho?c qua CI/CD approved step
+- S? d?ng flag `--idempotent` d? script an to�n khi ch?y l?i
 
 ---
 
-## 9. Hạ Tầng Triển Khai
+## 9. H? T?ng Tri?n Khai
 
 ### 9.1. Environments
 
-| Môi trường | Mục đích | Hạ tầng |
+| M�i tru?ng | M?c d�ch | H? t?ng |
 |------------|---------|---------|
 | **Local** | Development | Docker Compose (API + PG + Redis + Seq), Cloudinary (cloud) |
 | **Staging** | Testing, QA | VPS / Cloud VM (Docker Compose) |
-| **Production** | Live | Cloud VM hoặc Kubernetes |
+| **Production** | Live | Cloud VM ho?c Kubernetes |
 
-### 9.2. Architecture cho Production (Option A: VPS đơn giản)
+### 9.2. Architecture cho Production (Option A: VPS don gi?n)
 
-```
-                        ┌─────────────────┐
-                        │   Cloudflare     │  DNS + CDN + SSL
-                        │   (hoặc Nginx)  │
-                        └────────┬────────┘
-                                 │
-                        ┌────────▼────────┐
-                        │  Nginx Reverse  │  Load balancer
-                        │  Proxy          │  + SSL termination
-                        └────────┬────────┘
-                    ┌────────────┼────────────┐
-               ┌────▼────┐ ┌────▼────┐ ┌────▼────┐
-               │  API-1  │ │  API-2  │ │  API-3  │  .NET 8 containers
-               └────┬────┘ └────┬────┘ └────┬────┘
-                    └────────────┼────────────┘
-                    ┌────────────┼────────────┐
-               ┌────▼────┐ ┌────▼────┐ ┌────▼────┐
-               │PostgreSQL│ │  Redis  │
-               │(Primary) │ │         │
-               └─────────┘ └─────────┘  + Cloudinary (Cloud, miễn phí)
-```
+``
+                        +-----------------+
+                        �   Cloudflare     �  DNS + CDN + SSL
+                        �   (ho?c Nginx)  �
+                        +-----------------+
+                                 �
+                        +--------?--------+
+                        �  Nginx Reverse  �  Load balancer
+                        �  Proxy          �  + SSL termination
+                        +-----------------+
+                    +------------+------------+
+               +----?----+ +----?----+ +----?----+
+               �  API-1  � �  API-2  � �  API-3  �  .NET 8 containers
+               +---------+ +---------+ +---------+
+                    +------------+------------+
+                    +------------+------------+
+               +----?----+ +----?----+ +----?----+
+               �PostgreSQL� �  Redis  �
+               �(Primary) � �         �
+               +---------+ +---------+  + Cloudinary (Cloud, mi?n ph�)
+``
 
 ### 9.3. Architecture cho Production (Option B: Cloud-native)
 
-```
-                        ┌─────────────────┐
-                        │  AWS ALB / GCP   │
-                        │  Load Balancer   │
-                        └────────┬────────┘
-                                 │
-                   ┌─────────────┼─────────────┐
-              ┌────▼────┐  ┌────▼────┐  ┌─────▼────┐
-              │ ECS/GKE │  │ ECS/GKE │  │ ECS/GKE  │
-              │ API Pod │  │ API Pod │  │ API Pod  │
-              └────┬────┘  └────┬────┘  └────┬─────┘
-                   └─────────────┼─────────────┘
-                   ┌─────────────┼─────────────┐
-              ┌────▼────┐  ┌────▼────┐  ┌─────▼────┐
-              │ RDS     │  │ElastiC. │
-              │PostgreSQL│  │ Redis  │  + Cloudinary (Cloud, miễn phí)
-              └─────────┘  └─────────┘
-```
+``
+                        +-----------------+
+                        �  AWS ALB / GCP   �
+                        �  Load Balancer   �
+                        +-----------------+
+                                 �
+                   +-------------+-------------+
+              +----?----+  +----?----+  +-----?----+
+              � ECS/GKE �  � ECS/GKE �  � ECS/GKE  �
+              � API Pod �  � API Pod �  � API Pod  �
+              +---------+  +---------+  +----------+
+                   +-------------+-------------+
+                   +-------------+-------------+
+              +----?----+  +----?----+  +-----?----+
+              � RDS     �  �ElastiC. �
+              �PostgreSQL�  � Redis  �  + Cloudinary (Cloud, mi?n ph�)
+              +---------+  +---------+
+``
 
 ### 9.4. Nginx Config
 
-```nginx
+``nginx
 # /etc/nginx/sites-available/pickleball-api
 upstream api_servers {
     server 127.0.0.1:5001;
@@ -1476,7 +1658,7 @@ server {
         proxy_set_header Connection "upgrade";
         proxy_set_header Host $host;
         proxy_cache_bypass $http_upgrade;
-        proxy_read_timeout 86400;  # 24 giờ cho WebSocket
+        proxy_read_timeout 86400;  # 24 gi? cho WebSocket
     }
 
     # Health check
@@ -1484,12 +1666,12 @@ server {
         proxy_pass http://api_servers;
     }
 }
-```
+``
 
 ### 9.5. Environment Variables (Production)
 
-```bash
-# .env.production (KHÔNG commit vào git)
+``bash
+# .env.production (KH�NG commit v�o git)
 ASPNETCORE_ENVIRONMENT=Production
 
 # Database
@@ -1505,7 +1687,7 @@ Jwt__Audience=PickleballApp
 Jwt__AccessTokenExpirationMinutes=15
 Jwt__RefreshTokenExpirationDays=7
 
-# Cloudinary (Miễn phí)
+# Cloudinary (Mi?n ph�)
 Cloudinary__CloudName=your-cloud-name
 Cloudinary__ApiKey=***
 Cloudinary__ApiSecret=***
@@ -1517,47 +1699,47 @@ Fcm__CredentialsPath=/secrets/firebase-credentials.json
 # CORS
 Cors__Origins__0=https://pickleball-app.com
 Cors__Origins__1=https://admin.pickleball-app.com
-```
+``
 
 ---
 
 ## 10. Monitoring & Observability
 
-### 10.1. Stack giám sát
+### 10.1. Stack gi�m s�t
 
-| Thành phần | Công cụ | Mục đích |
+| Th�nh ph?n | C�ng c? | M?c d�ch |
 |-----------|---------|---------|
-| **Logging** | Serilog → Seq (hoặc ELK) | Structured logs, search, dashboard |
+| **Logging** | Serilog ? Seq (ho?c ELK) | Structured logs, search, dashboard |
 | **Metrics** | Prometheus + Grafana | API latency, request rate, error rate |
 | **Error Tracking** | Sentry | Exception tracking, alerting |
-| **Health Checks** | ASP.NET Health Checks | Kiểm tra DB, Redis, FCM |
+| **Health Checks** | ASP.NET Health Checks | Ki?m tra DB, Redis, FCM |
 | **Uptime** | UptimeRobot / Grafana OnCall | Alert khi service down |
 
 ### 10.2. Health Check Endpoints
 
-```
-GET /health          → 200 OK (tất cả healthy) / 503 (có service down)
-GET /health/ready    → Kiểm tra DB + Redis
-GET /health/live     → Kiểm tra process đang chạy
-```
+``
+GET /health          ? 200 OK (t?t c? healthy) / 503 (c� service down)
+GET /health/ready    ? Ki?m tra DB + Redis
+GET /health/live     ? Ki?m tra process dang ch?y
+``
 
-### 10.3. Key Metrics cần theo dõi
+### 10.3. Key Metrics c?n theo d�i
 
-| Metric | Ngưỡng cảnh báo | Mô tả |
+| Metric | Ngu?ng c?nh b�o | M� t? |
 |--------|-----------------|--------|
-| API Response Time (p95) | > 500ms | Thời gian phản hồi |
-| API Error Rate (5xx) | > 1% | Tỉ lệ lỗi server |
-| DB Connection Pool | > 80% used | Pool kết nối DB |
-| Redis Memory | > 80% | Bộ nhớ cache |
-| SignalR Connections | > 10,000 | Số kết nối WebSocket |
-| CPU Usage | > 80% | Sử dụng CPU |
-| Memory Usage | > 85% | Sử dụng RAM |
-| Disk Usage | > 90% | Dung lượng đĩa |
+| API Response Time (p95) | > 500ms | Th?i gian ph?n h?i |
+| API Error Rate (5xx) | > 1% | T? l? l?i server |
+| DB Connection Pool | > 80% used | Pool k?t n?i DB |
+| Redis Memory | > 80% | B? nh? cache |
+| SignalR Connections | > 10,000 | S? k?t n?i WebSocket |
+| CPU Usage | > 80% | S? d?ng CPU |
+| Memory Usage | > 85% | S? d?ng RAM |
+| Disk Usage | > 90% | Dung lu?ng dia |
 
 ### 10.4. Alerting
 
-```yaml
-# Prometheus alert rules (ví dụ)
+``yaml
+# Prometheus alert rules (v� d?)
 groups:
   - name: pickleball-api
     rules:
@@ -1576,70 +1758,70 @@ groups:
           severity: warning
         annotations:
           summary: "API p95 latency > 500ms"
-```
+``
 
 ---
 
-## 11. Bảo Mật
+## 11. B?o M?t
 
 ### 11.1. Authentication Flow
 
-```
-┌──────────┐         ┌──────────┐         ┌──────────┐
-│  Client  │────────>│   API    │────────>│    DB    │
-└──────────┘         └──────────┘         └──────────┘
+``
++----------+         +----------+         +----------+
+�  Client  �-------->�   API    �-------->�    DB    �
++----------+         +----------+         +----------+
 
 1. POST /api/auth/login { email, password }
 2. API validate credentials
-3. API generate: Access Token (JWT, 15 phút) + Refresh Token (opaque, 7 ngày)
-4. Client lưu:
-   - Access Token → Memory (web) / SecureStore (mobile)
-   - Refresh Token → HttpOnly Cookie (web) / SecureStore (mobile)
-5. Mỗi request: Authorization: Bearer <access_token>
-6. Khi access token hết hạn:
+3. API generate: Access Token (JWT, 15 ph�t) + Refresh Token (opaque, 7 ng�y)
+4. Client luu:
+   - Access Token ? Memory (web) / SecureStore (mobile)
+   - Refresh Token ? HttpOnly Cookie (web) / SecureStore (mobile)
+5. M?i request: Authorization: Bearer <access_token>
+6. Khi access token h?t h?n:
    - POST /api/auth/refresh { refreshToken }
-   - API verify refresh token → issue new pair
+   - API verify refresh token ? issue new pair
 7. Logout: DELETE refresh token from DB + Cookie
-```
+``
 
 ### 11.2. Security Checklist
 
-| Hạng mục | Biện pháp |
+| H?ng m?c | Bi?n ph�p |
 |---------|----------|
-| **Password** | bcrypt, cost factor 12, validate policy (8+ ký tự, chữ hoa, số, đặc biệt) |
-| **JWT** | HS256 (hoặc RS256 nếu microservice), short-lived (15 phút) |
-| **Refresh Token** | Opaque string, lưu DB, hash trước khi lưu, rotation (mỗi lần dùng tạo mới) |
-| **Rate Limiting** | Login: 5 req/15 phút/IP. API chung: 100 req/phút/user |
-| **CORS** | Whitelist explicit origins, AllowCredentials chỉ cho trusted origins |
-| **Input Validation** | FluentValidation trên mọi request DTO |
+| **Password** | bcrypt, cost factor 12, validate policy (8+ k� t?, ch? hoa, s?, d?c bi?t) |
+| **JWT** | HS256 (ho?c RS256 n?u microservice), short-lived (15 ph�t) |
+| **Refresh Token** | Opaque string, luu DB, hash tru?c khi luu, rotation (m?i l?n d�ng t?o m?i) |
+| **Rate Limiting** | Login: 5 req/15 ph�t/IP. API chung: 100 req/ph�t/user |
+| **CORS** | Whitelist explicit origins, AllowCredentials ch? cho trusted origins |
+| **Input Validation** | FluentValidation tr�n m?i request DTO |
 | **SQL Injection** | EF Core parameterized queries (default) |
 | **XSS** | Content-Type headers, CSP headers |
 | **HTTPS** | Enforce everywhere, HSTS header |
 | **File Upload** | Validate MIME type, max size, virus scan (optional) |
-| **Secrets** | Không commit vào git, dùng env vars hoặc Secret Manager |
+| **Secrets** | Kh�ng commit v�o git, d�ng env vars ho?c Secret Manager |
 
-### 11.3. Authorization — Policy-based
+### 11.3. Authorization � Policy-based
 
-```csharp
+``csharp
 // Policies
 builder.Services.AddAuthorization(options =>
 {
     options.AddPolicy("TournamentCreator", policy =>
         policy.RequireAssertion(context =>
         {
-            // Kiểm tra trong TournamentCreatorFilter
-            return true; // Logic nằm trong filter
+            // Ki?m tra trong TournamentCreatorFilter
+            return true; // Logic n?m trong filter
         }));
 });
-```
+``
 
 ---
 
-## 12. Quy Ước Lập Trình
+## 12. Quy U?c L?p Tr�nh
 
 ### 12.1. Naming Conventions
 
-| Loại | Convention | Ví dụ |
+| Lo?i | Convention | V� d? |
 |------|-----------|-------|
 | Class, Interface | PascalCase | `TournamentService`, `ITournamentService` |
 | Method | PascalCase | `GetByIdAsync()` |
@@ -1651,32 +1833,32 @@ builder.Services.AddAuthorization(options =>
 
 ### 12.2. Async Convention
 
-- Tất cả method I/O phải async
+- T?t c? method I/O ph?i async
 - Suffix `Async` cho async methods
-- Luôn truyền `CancellationToken` qua controller đến service
+- Lu�n truy?n `CancellationToken` qua controller d?n service
 
 ### 12.3. API Convention
 
-- URL: kebab-case → `/api/tournaments/:id/groups`
-- HTTP verbs: GET (đọc), POST (tạo), PUT (cập nhật toàn bộ), PATCH (cập nhật 1 phần), DELETE (xóa)
+- URL: kebab-case ? `/api/tournaments/:id/groups`
+- HTTP verbs: GET (d?c), POST (t?o), PUT (c?p nh?t to�n b?), PATCH (c?p nh?t 1 ph?n), DELETE (x�a)
 - Response: 200 (OK), 201 (Created), 204 (No Content), 400 (Bad Request), 401 (Unauthorized), 403 (Forbidden), 404 (Not Found), 422 (Unprocessable Entity), 429 (Too Many Requests), 500 (Server Error)
 
 ### 12.4. Git Branch Strategy
 
-```
-main ─────────────────────────────────── (production, protected)
-  │
-  └── develop ────────────────────────── (staging, integration)
-        │
-        ├── feature/tournament-crud ──── (feature branches)
-        ├── feature/match-scoring
-        ├── fix/score-validation
-        └── agent/YYYYMMDD-slug ──────── (agent-created branches)
-```
+``
+main ----------------------------------- (production, protected)
+  �
+  +-- develop -------------------------- (staging, integration)
+        �
+        +-- feature/tournament-crud ---- (feature branches)
+        +-- feature/match-scoring
+        +-- fix/score-validation
+        +-- agent/YYYYMMDD-slug -------- (agent-created branches)
+``
 
 ### 12.5. Commit Message Convention
 
-```
+``
 <type>(<scope>): <subject>
 
 feat(tournament): add create tournament API
@@ -1685,4 +1867,4 @@ refactor(auth): extract JWT logic to separate service
 docs(api): update Swagger descriptions
 test(standings): add tiebreaker unit tests
 chore(docker): update postgres to v16
-```
+``

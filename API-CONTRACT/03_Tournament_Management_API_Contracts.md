@@ -221,18 +221,29 @@ Client                          Server                          Database
 }
 ```
 
+### Preconditions
+
+| Điều kiện | Mô tả |
+|-----------|-------|
+| ✅ Authentication | Bearer Token bắt buộc |
+| ✅ Email Verified | User phải xác thực email trước khi tạo giải (`emailVerified == true`) |
+
 ### Error Codes
 
 | HTTP | Error Type | Điều kiện |
-|:----:|-----------|-----------|
+|:----:|-----------|-----------| 
+| 403 | EMAIL_NOT_VERIFIED | User chưa xác thực email. Trả kèm message hướng dẫn verify |
 | 400 | VALIDATION_ERROR | name rỗng, type sai, numGroups ngoài khoảng |
 | 400 | INVALID_DATE | Ngày trong quá khứ |
 
 ### Business Rules
 
-1. Giải tạo ở status `draft` — chưa hiển thị trên danh sách public
-2. Creator tự động là chủ giải, có toàn quyền quản lý
-3. `maxParticipants` được tính: singles = numGroups × 4, doubles = numGroups × 4 × 2
+1. **Email Verified bắt buộc** — chỉ user đã xác thực email mới được tạo giải đấu
+2. Giải tạo ở status `draft` — chưa hiển thị trên danh sách public
+3. Creator tự động là chủ giải, có toàn quyền quản lý
+4. `maxParticipants` được tính: singles = numGroups × 4, doubles = numGroups × 4 × 2
+
+---
 
 ---
 

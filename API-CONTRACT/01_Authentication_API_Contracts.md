@@ -7,8 +7,8 @@
 | **Version** | 1.0 |
 | **Ngày cập nhật** | 2026-03-12 |
 | **Phase** | 1 |
-| **Số endpoints** | 5 |
-| **DB Tables** | Users, RefreshTokens |
+| **Số endpoints** | 7 |
+| **DB Tables** | Users, UserAuthProviders, RefreshTokens |
 
 ---
 
@@ -18,9 +18,11 @@
 |---|--------|----------|:----:|:----------:|-------|
 | 1.1 | POST | `/auth/register` | ❌ | 10/h | Đăng ký tài khoản mới |
 | 1.2 | POST | `/auth/login` | ❌ | 5/15min | Đăng nhập bằng email + mật khẩu |
-| 1.3 | POST | `/auth/social` | ❌ | 10/15min | Đăng nhập qua Google / Apple |
+| 1.3 | POST | `/auth/social` | ❌ | 10/15min | Đăng nhập qua Google / Apple / Facebook |
 | 1.4 | POST | `/auth/refresh` | ❌ | 30/h | Làm mới access token |
 | 1.5 | PUT | `/auth/password` | ✅ Auth | 3/h | Đổi mật khẩu |
+| 1.6 | POST | `/auth/send-verification` | ✅ Auth | 3/h | Gửi OTP xác thực email |
+| 1.7 | POST | `/auth/verify-email` | ✅ Auth | 5/h | Xác thực email bằng OTP |
 
 ---
 
@@ -262,7 +264,7 @@ Client                          Server                          Database
 ## 1.3. POST /auth/social — Đăng nhập qua mạng xã hội
 
 ### Summary
-Đăng nhập hoặc đăng ký tự động bằng Google / Apple OAuth2. Nếu email chưa tồn tại → tạo tài khoản mới.
+Đăng nhập hoặc đăng ký tự động bằng Google / Apple / Facebook OAuth2. Nếu email chưa tồn tại → tạo tài khoản mới + liên kết provider vào bảng `UserAuthProviders`.
 
 ### User Story
 ```
@@ -271,10 +273,10 @@ Tôi muốn đăng nhập nhanh bằng tài khoản Google hoặc Apple,
 Để không phải nhớ thêm mật khẩu mới.
 
 Acceptance Criteria:
-- Tôi nhấn nút "Đăng nhập bằng Google" trên ứng dụng
-- Ứng dụng gửi idToken từ Google lên server
-- Nếu email chưa có tài khoản → tự động tạo + đăng nhập
-- Nếu email đã có tài khoản → đăng nhập luôn
+- Tôi nhấn nút "Đăng nhập bằng Google/Facebook" trên ứng dụng
+- Ứng dụng gửi token từ provider lên server
+- Nếu email chưa có tài khoản → tự động tạo + liên kết provider
+- Nếu email đã có tài khoản → liên kết provider mới (nếu chưa có) + đăng nhập
 - Tôi nhận được JWT tokens
 ```
 
@@ -334,8 +336,9 @@ Client               App/Web              Server               Google/Apple
 
 | Field | Type | Required | Validation |
 |-------|------|:--------:|------------|
-| provider | string | ✅ | `"google"` hoặc `"apple"` |
-| idToken | string | ✅ | Token hợp lệ từ OAuth2 provider |
+| provider | string | ✅ | `"google"`, `"apple"`, hoặc `"facebook"` |
+| idToken | string | Có điều kiện | Token hợp lệ từ Google hoặc Apple (bắt buộc nếu provider = google/apple) |
+| accessToken | string | Có điều kiện | Access token từ Facebook (bắt buộc nếu provider = facebook) |
 
 ### Response
 
@@ -363,16 +366,19 @@ Client               App/Web              Server               Google/Apple
 
 | HTTP | Error Type | Điều kiện |
 |:----:|-----------|-----------|
-| 400 | INVALID_PROVIDER | Provider không phải "google" hoặc "apple" |
-| 401 | INVALID_TOKEN | idToken không hợp lệ, hết hạn, hoặc bị giả mạo |
+| 400 | INVALID_PROVIDER | Provider không phải "google", "apple", hoặc "facebook" |
+| 401 | INVALID_TOKEN | Token không hợp lệ, hết hạn, hoặc bị giả mạo |
 
 ### Business Rules
 
-1. Server phải verify idToken trực tiếp với Google/Apple (không tin client)
-2. Nếu email từ social trùng với tài khoản local → liên kết (link) tài khoản
-3. Tên và avatar lấy từ Google/Apple profile nếu tạo mới
-4. User tạo qua social không có password → không thể login bằng email/password
+1. Server phải verify token trực tiếp với provider (không tin client):
+   - **Google/Apple:** Verify `idToken` qua Google/Apple API
+   - **Facebook:** Gọi Facebook Graph API `GET /me?fields=id,name,email&access_token={accessToken}`
+2. Nếu email từ social trùng với tài khoản đã có → liên kết (link) provider vào bảng `UserAuthProviders`
+3. Tên và avatar lấy từ provider profile nếu tạo mới, lưu vào cả `Users` và `UserAuthProviders`
+4. User tạo qua social không có password → `PasswordHash = NULL` → không thể login bằng email/password
 5. `isNewUser: true` để FE biết cần hiển thị màn hình onboarding
+6. User đăng nhập social được tự động `EmailVerified = TRUE` (vì email đã được provider xác thực)
 
 ---
 
@@ -606,3 +612,117 @@ Content-Type: application/json
 | Reuse detection | Token đã revoke bị dùng lại → revoke ALL → force re-login |
 | Rate limiting | Login: 5/15min, Register: 10/h, Password: 3/h |
 | Brute force | Generic error message, không tiết lộ email tồn tại |
+| OAuth Providers | Google (idToken), Apple (idToken), Facebook (accessToken) |
+| Multi-provider | 1 user link nhiều providers qua bảng UserAuthProviders |
+| Email Verification | OTP 6 số, TTL 10 phút, bắt buộc trước khi tạo giải đấu |
+
+---
+
+## 1.6. POST /auth/send-verification — Gửi OTP xác thực email
+
+### Summary
+Gửi mã OTP 6 số qua email để xác thực địa chỉ email của user. Bắt buộc xác thực trước khi tạo giải đấu.
+
+### User Story
+```
+Là một người dùng đã đăng ký,
+Tôi muốn xác thực email của mình,
+Để được phép tạo giải đấu trên hệ thống.
+
+Acceptance Criteria:
+- Tôi nhấn nút "Xác thực email" trong app
+- Hệ thống gửi OTP 6 số về email của tôi
+- OTP có hạn 10 phút
+- Nếu email đã xác thực rồi → thông báo không cần gửi lại
+```
+
+### Auth & Role
+
+| Yêu cầu | Giá trị |
+|---------|---------|
+| Authentication | ✅ Bearer Token |
+| Rate Limit | 3 requests / giờ |
+
+### Request
+
+**Không cần body** — Email lấy từ JWT token của user hiện tại.
+
+### Response
+
+**200 OK:**
+```json
+{
+  "data": {
+    "message": "OTP đã được gửi đến email của bạn",
+    "expiresInSeconds": 600
+  }
+}
+```
+
+### Error Codes
+
+| HTTP | Error Type | Điều kiện |
+|:----:|-----------|-----------|
+| 422 | ALREADY_VERIFIED | Email đã được xác thực rồi |
+| 429 | RATE_LIMIT_EXCEEDED | Quá 3 lần / giờ |
+
+### Business Rules
+
+1. OTP là 6 chữ số ngẫu nhiên, được hash (SHA-256) trước khi lưu vào `Users.EmailVerificationToken`
+2. OTP hết hạn sau 10 phút
+3. Mỗi lần gửi OTP mới, OTP cũ bị vô hiệu hóa
+4. Nếu user đăng ký qua social (Google/Facebook/Apple) → tự động `EmailVerified = TRUE`
+
+---
+
+## 1.7. POST /auth/verify-email — Xác thực email
+
+### Summary
+Xác thực email bằng mã OTP đã gửi. Sau khi thành công, user có thể tạo giải đấu.
+
+### Auth & Role
+
+| Yêu cầu | Giá trị |
+|---------|---------|
+| Authentication | ✅ Bearer Token |
+| Rate Limit | 5 requests / giờ |
+
+### Request
+
+**Body:**
+```json
+{
+  "otp": "482917"
+}
+```
+
+| Field | Type | Required | Validation |
+|-------|------|:--------:|------------|
+| otp | string | ✅ | 6 chữ số |
+
+### Response
+
+**200 OK:**
+```json
+{
+  "data": {
+    "emailVerified": true,
+    "emailVerifiedAt": "2026-03-12T15:30:00Z"
+  }
+}
+```
+
+### Error Codes
+
+| HTTP | Error Type | Điều kiện |
+|:----:|-----------|-----------|
+| 400 | INVALID_OTP | OTP không đúng |
+| 400 | OTP_EXPIRED | OTP đã hết hạn (quá 10 phút) |
+| 422 | ALREADY_VERIFIED | Email đã xác thực rồi |
+
+### Business Rules
+
+1. So sánh hash của OTP với `EmailVerificationToken` trong DB
+2. Kiểm tra thời gian hết hạn (10 phút kể từ lúc gửi)
+3. Sau khi verify thành công: set `EmailVerified = TRUE`, `EmailVerifiedAt = NOW()`, xóa `EmailVerificationToken`
+4. Sau 5 lần nhập sai OTP: buộc gửi lại OTP mới

@@ -1,10 +1,11 @@
 -- =====================================================
 -- Pickleball App Database Migration Script
 -- Database: pickleball_db
--- Version: 2.0 (INTEGER IDs + Cloudinary)
+-- Version: 3.0 (Multi-provider Auth + Email Verification)
 -- Date: 2026-03-12
 -- Features: INTEGER Auto-increment IDs, Round Robin,
---           JSONB Scores, Cloudinary File Storage
+--           JSONB Scores, Cloudinary File Storage,
+--           Multi-provider OAuth, Email Verification
 -- =====================================================
 
 -- =====================================================
@@ -13,28 +14,51 @@
 -- =====================================================
 
 CREATE TABLE "Users" (
-    "Id"            INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    "Email"         VARCHAR(255) NOT NULL,
-    "PasswordHash"  VARCHAR(255) NOT NULL,
-    "Name"          VARCHAR(100) NOT NULL,
-    "AvatarUrl"     VARCHAR(500),
-    "Bio"           TEXT,
-    "SkillLevel"    DECIMAL(2,1) NOT NULL DEFAULT 3.0,
-    "DominantHand"  VARCHAR(10),
-    "PaddleType"    VARCHAR(100),
-    "Provider"      VARCHAR(20),
-    "ProviderId"    VARCHAR(255),
-    "CreatedAt"     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    "UpdatedAt"     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "Id"                       INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    "Email"                    VARCHAR(255) NOT NULL,
+    "PasswordHash"             VARCHAR(255),
+    "Name"                     VARCHAR(100) NOT NULL,
+    "AvatarUrl"                VARCHAR(500),
+    "Bio"                      TEXT,
+    "SkillLevel"               DECIMAL(2,1) NOT NULL DEFAULT 3.0,
+    "DominantHand"             VARCHAR(10),
+    "PaddleType"               VARCHAR(100),
+    "EmailVerified"            BOOLEAN NOT NULL DEFAULT FALSE,
+    "EmailVerifiedAt"          TIMESTAMPTZ,
+    "EmailVerificationToken"   VARCHAR(500),
+    "CreatedAt"                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    "UpdatedAt"                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
     CONSTRAINT "UQ_Users_Email" UNIQUE ("Email"),
     CONSTRAINT "CK_Users_SkillLevel" CHECK ("SkillLevel" >= 1.0 AND "SkillLevel" <= 5.0),
     CONSTRAINT "CK_Users_DominantHand" CHECK ("DominantHand" IN ('left', 'right') OR "DominantHand" IS NULL)
 );
 
-CREATE INDEX "IX_Users_Provider" ON "Users"("Provider", "ProviderId");
+COMMENT ON TABLE "Users" IS 'Tài khoản và hồ sơ người chơi. OAuth providers tách ra bảng UserAuthProviders.';
 
-COMMENT ON TABLE "Users" IS 'Tài khoản và hồ sơ người chơi. Hỗ trợ đăng nhập local + OAuth (Google, Apple).';
+-- =====================================================
+-- TABLE 2: user_auth_providers (OAuth Providers)
+-- Lưu OAuth providers đã liên kết. 1 user → N providers.
+-- =====================================================
+
+CREATE TABLE "UserAuthProviders" (
+    "Id"              INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    "UserId"          INTEGER NOT NULL REFERENCES "Users"("Id") ON DELETE CASCADE,
+    "Provider"        VARCHAR(20) NOT NULL,
+    "ProviderUserId"  VARCHAR(255) NOT NULL,
+    "Email"           VARCHAR(255),
+    "Name"            VARCHAR(100),
+    "AvatarUrl"       VARCHAR(500),
+    "CreatedAt"       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    CONSTRAINT "CK_UserAuthProviders_Provider" CHECK ("Provider" IN ('google', 'facebook', 'apple')),
+    CONSTRAINT "UQ_UserAuthProviders_Provider_UserId" UNIQUE ("Provider", "ProviderUserId"),
+    CONSTRAINT "UQ_UserAuthProviders_User_Provider" UNIQUE ("UserId", "Provider")
+);
+
+CREATE INDEX "IX_UserAuthProviders_UserId" ON "UserAuthProviders"("UserId");
+
+COMMENT ON TABLE "UserAuthProviders" IS 'OAuth providers liên kết với user. 1 user có thể link Google + Facebook + Apple.';
 
 -- =====================================================
 -- TABLE 2: refresh_tokens (Token làm mới)
@@ -445,24 +469,25 @@ CREATE TRIGGER update_device_tokens_updated_at BEFORE UPDATE ON "DeviceTokens" F
 -- SEED DATA
 -- =====================================================
 
--- 1. Admin User
-INSERT INTO "Users" ("Email", "PasswordHash", "Name", "SkillLevel")
+-- 1. Admin User (EmailVerified = TRUE)
+INSERT INTO "Users" ("Email", "PasswordHash", "Name", "SkillLevel", "EmailVerified", "EmailVerifiedAt")
 VALUES (
     'admin@pickleball-app.com',
     '$2a$12$LJ3m4ys.kN5Xx1Kf5sNZxuYVfGqXKVJiL6SO0qH5..x3G3Y2HhMGe', -- hash of 'Admin@123'
     'System Admin',
-    5.0
+    5.0,
+    TRUE,
+    NOW()
 );
 
--- 2. Demo Users
-INSERT INTO "Users" ("Email", "PasswordHash", "Name", "SkillLevel") VALUES
-('player1@demo.com', '$2a$12$LJ3m4ys.kN5Xx1Kf5sNZxuYVfGqXKVJiL6SO0qH5..x3G3Y2HhMGe', 'Nguyễn Văn A', 3.5),
-('player2@demo.com', '$2a$12$LJ3m4ys.kN5Xx1Kf5sNZxuYVfGqXKVJiL6SO0qH5..x3G3Y2HhMGe', 'Trần Văn B', 4.0),
-('player3@demo.com', '$2a$12$LJ3m4ys.kN5Xx1Kf5sNZxuYVfGqXKVJiL6SO0qH5..x3G3Y2HhMGe', 'Lê Văn C', 3.0),
-('player4@demo.com', '$2a$12$LJ3m4ys.kN5Xx1Kf5sNZxuYVfGqXKVJiL6SO0qH5..x3G3Y2HhMGe', 'Phạm Văn D', 3.5);
+-- 2. Demo Users (EmailVerified = TRUE cho testing)
+INSERT INTO "Users" ("Email", "PasswordHash", "Name", "SkillLevel", "EmailVerified", "EmailVerifiedAt") VALUES
+('player1@demo.com', '$2a$12$LJ3m4ys.kN5Xx1Kf5sNZxuYVfGqXKVJiL6SO0qH5..x3G3Y2HhMGe', 'Nguyễn Văn A', 3.5, TRUE, NOW()),
+('player2@demo.com', '$2a$12$LJ3m4ys.kN5Xx1Kf5sNZxuYVfGqXKVJiL6SO0qH5..x3G3Y2HhMGe', 'Trần Văn B', 4.0, TRUE, NOW()),
+('player3@demo.com', '$2a$12$LJ3m4ys.kN5Xx1Kf5sNZxuYVfGqXKVJiL6SO0qH5..x3G3Y2HhMGe', 'Lê Văn C', 3.0, TRUE, NOW()),
+('player4@demo.com', '$2a$12$LJ3m4ys.kN5Xx1Kf5sNZxuYVfGqXKVJiL6SO0qH5..x3G3Y2HhMGe', 'Phạm Văn D', 3.5, TRUE, NOW());
 
 -- 3. Demo Tournament (Singles, 1 bảng, completed)
--- Giả sử user 2 (Nguyễn Văn A) là người tạo giải
 INSERT INTO "Tournaments" ("CreatorId", "Name", "Type", "NumGroups", "ScoringFormat", "Status", "Date", "Location")
 VALUES (
     2,
@@ -471,4 +496,4 @@ VALUES (
     '2026-03-01', 'Sân Demo, Quận 1'
 );
 
-SELECT 'Pickleball Database v2.0 Migration Completed' as status;
+SELECT 'Pickleball Database v3.0 Migration Completed' as status;
